@@ -17,13 +17,14 @@ def connect(db: str) -> duckdb.DuckDBPyConnection:
     return con
 
 
-def nfkc(table):
+def nfkc(table, column: str = "name"):
     return table.set_column(
-        table.schema.get_field_index("name"), "name", pc.utf8_normalize(table["name"], "NFKC")
+        table.schema.get_field_index(column), column, pc.utf8_normalize(table[column], "NFKC")
     )
 
 
 def build(src: str, out: str) -> None:
+    Path(out).mkdir(parents=True, exist_ok=True)
     con = connect(f"{out}/index.duckdb")
     houjin = nfkc(con.read_parquet(src).to_arrow_table())
     con.register("houjin_raw", houjin)
@@ -42,7 +43,7 @@ def build(src: str, out: str) -> None:
         SELECT g, count(*) AS df, ln((SELECT count(*) FROM company) / count(*)) AS idf
         FROM gram GROUP BY g
     """)
-    print(con.sql("SELECT (SELECT count(*) FROM company) companies, (SELECT count(*) FROM gram) postings, (SELECT count(*) FROM gram_idf) grams").fetchall())
+    print(con.execute("SELECT (SELECT count(*) FROM company) companies, (SELECT count(*) FROM gram) postings, (SELECT count(*) FROM gram_idf) grams").fetchall())
 
 
 if __name__ == "__main__":

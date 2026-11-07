@@ -61,4 +61,4 @@ Queria Company Resolver（法人名寄せツール）の照合の規則と応答
 
 - 法人番号の変更履歴（旧商号・閉鎖）の取り込み
 - EDINET の有価証券報告書から本店の電話番号を取り出す
-- 索引の試作と、EDINET の提出者を正解にしたベンチマーク
+- 試作（[prototype/](prototype/README.md)）の規則を dbt と Worker に移す

@@ -1,12 +1,11 @@
 """EDINET の提出者（法人番号つき）を正解にして照合を測る（試作）。
 
-usage: python -I bench.py <index_dir> <edinet.parquet>
+usage: python bench.py <index_dir> <edinet.parquet>
+（build_index を import するので -I は付けない。-I ではスクリプトのディレクトリが sys.path に入らない）
 """
 import sys
 
-import pyarrow.compute as pc
-
-from build_index import connect
+from build_index import connect, nfkc
 
 # 1 件の検索で引く bigram の数。珍しい順に取る（読む索引の量を抑えるため）
 RAREST_GRAMS = 8
@@ -20,10 +19,8 @@ VARIANTS = {
 
 
 def load_queries(con, edinet: str) -> None:
-    t = con.read_parquet(edinet).to_arrow_table()
-    t = t.set_column(t.schema.get_field_index("filer_name"), "filer_name", pc.utf8_normalize(t["filer_name"], "NFKC"))
-    con.register("edinet_raw", t)
-    # typo_name: 法人格を「(株)」などに略し、商号の本体から 1 文字を消す（位置は法人番号から決める）
+    con.register("edinet_raw", nfkc(con.read_parquet(edinet).to_arrow_table(), "filer_name"))
+    # typo_name: 法人格を「(株)」などに略し、商号の本体から 1 文字を消す（位置は法人番号を商号の文字数で割った余り）
     con.execute("""
         CREATE OR REPLACE TABLE query AS
         WITH e AS (
@@ -35,7 +32,7 @@ def load_queries(con, edinet: str) -> None:
         SELECT row_number() OVER () AS qid, truth, name, address, lf, core,
                CASE WHEN length(core) >= 3
                     THEN coalesce(replace(replace(replace(lf, '株式会社', '(株)'), '有限会社', '(有)'), '合同会社', '(同)'), '')
-                         || core[1:(hash(truth) % length(core))::int] || core[(hash(truth) % length(core))::int + 2:]
+                         || core[1:(CAST(truth AS BIGINT) % length(core))::int] || core[(CAST(truth AS BIGINT) % length(core))::int + 2:]
                     ELSE name END AS typo_name
         FROM e
     """)
@@ -50,14 +47,17 @@ def run(con, name_col: str, addr_col: str | None) -> dict:
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE qg AS
         SELECT qid, g, idf FROM (SELECT qid, unnest(bigrams(core)) AS g FROM q) JOIN gram_idf USING (g)
-        QUALIFY row_number() OVER (PARTITION BY qid ORDER BY df) <= {RAREST_GRAMS}
+        QUALIFY row_number() OVER (PARTITION BY qid ORDER BY df, g) <= {RAREST_GRAMS}
     """)
-    # 住所に含まれる市区町村名のうち最も長いもの（「札幌市中央区」を「中央区」より優先）
+    # 住所に含まれる市区町村名のうち最も長いもの（「札幌市中央区」を「中央区」より優先）。
+    # 住所が都道府県名で始まるときは、同じ都道府県の市区町村だけを見る（東京都府中市と広島県府中市を分ける）
     con.execute("""
         CREATE OR REPLACE TEMP TABLE q_city_tbl AS
         SELECT q.qid, c.lg_code, c.city_name
-        FROM q JOIN (SELECT DISTINCT lg_code, city_name FROM company WHERE city_name <> '') c
+        FROM q JOIN (SELECT DISTINCT lg_code, prefecture_name, city_name FROM company WHERE city_name <> '') c
           ON contains(q.address, c.city_name)
+         AND (starts_with(q.address, c.prefecture_name)
+              OR NOT regexp_matches(q.address, '^(東京都|北海道|京都府|大阪府|.{2,3}県)'))
         QUALIFY length(c.city_name) = max(length(c.city_name)) OVER (PARTITION BY q.qid)
     """)
     con.execute(f"""
@@ -93,7 +93,7 @@ def run(con, name_col: str, addr_col: str | None) -> dict:
                      AND c.lg_code IN (SELECT lg_code FROM q_city_tbl t WHERE t.qid = q.qid)) AS same_name_city
         FROM q LEFT JOIN company c ON c.core = q.core GROUP BY q.qid
     """)
-    return con.sql(f"""
+    return con.execute(f"""
         WITH ranked AS (
           SELECT *, row_number() OVER (PARTITION BY qid ORDER BY ed, city_ok DESC, legal_ok DESC, score DESC, corporate_number) AS rk,
                  row_number() OVER (PARTITION BY qid ORDER BY ed + 2 * (NOT city_ok)::int, ed, legal_ok DESC, score DESC, corporate_number) AS rk2
@@ -115,7 +115,7 @@ def run(con, name_col: str, addr_col: str | None) -> dict:
                   CASE WHEN {'TRUE' if addr_col else 'FALSE'} THEN t.city_ok AND same_name_city = 1 ELSE same_name = 1 END) AS matched
           FROM res LEFT JOIN top t USING (qid)
         )
-        SELECT (SELECT list(struct_pack(truth := m2.truth, top := m2.top_cn)) FROM (SELECT * FROM m WHERE matched AND top_cn <> truth LIMIT 30) m2) AS wrong,
+        SELECT (SELECT list(struct_pack(truth := m2.truth, top := m2.top_cn)) FROM (SELECT * FROM m WHERE matched AND top_cn <> truth ORDER BY qid LIMIT 30) m2) AS wrong,
                count(*) AS n,
                count(*) FILTER (WHERE qid IN (SELECT qid FROM cand WHERE corporate_number = truth)) AS in_compare,
                count(*) FILTER (WHERE top1_main) AS top1_main,

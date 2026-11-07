@@ -17,7 +17,7 @@ CREATE OR REPLACE MACRO large_kana(s) AS (
 CREATE OR REPLACE MACRO core_name(s) AS (
   large_kana(upper(regexp_replace(
     regexp_replace(s, '株式会社|有限会社|合同会社|合資会社|合名会社|\((株|有|同|資|名)\)', '', 'g'),
-    '[\s・‐―-]', '', 'g')))
+    '[\s・‐―−–—-]', '', 'g')))
 );
 -- 文字 bigram（1 文字の商号はその 1 文字）
 CREATE OR REPLACE MACRO bigrams(s) AS (
