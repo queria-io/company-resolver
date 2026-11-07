@@ -1,0 +1,4 @@
+out/
+*.parquet
+*.duckdb
+__pycache__/
