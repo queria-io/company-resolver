@@ -9,7 +9,3 @@ dependencies = [
     "pyarrow>=21",
 ]
 
-[dependency-groups]
-dev = [
-    "pytest>=9.2.0",
-]
