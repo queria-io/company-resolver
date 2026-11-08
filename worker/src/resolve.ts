@@ -73,18 +73,28 @@ export const citiesIn = (address: string, cities: readonly City[]): City[] => {
   return hits.filter((c) => c.city_name.length === longest);
 };
 
-/** IDF の合計の上位 COMPARE_TOP 件 */
+/**
+ * IDF の合計の上位 COMPARE_TOP 件。合計が同じなら、商号の編集距離の小さい順
+ * (全国で読む bigram が少なく同じ合計の法人が多いとき、入力に近い商号を落とさないため)
+ */
 const topByScore = (
   rows: readonly Posting[],
   idf: ReadonlyMap<string, number>,
+  core: string,
 ): Map<string, number> => {
   const scores = rows.reduce(
     (acc, r) =>
       acc.set(r.corporate_number, (acc.get(r.corporate_number) ?? 0) + (idf.get(r.g) ?? 0)),
     new Map<string, number>(),
   );
+  const distance = new Map(rows.map((r) => [r.corporate_number, levenshtein(core, r.core)]));
   return new Map(
-    [...scores].sort(([a, x], [b, y]) => y - x || a.localeCompare(b)).slice(0, COMPARE_TOP),
+    [...scores]
+      .sort(
+        ([a, x], [b, y]) =>
+          y - x || (distance.get(a) ?? 0) - (distance.get(b) ?? 0) || a.localeCompare(b),
+      )
+      .slice(0, COMPARE_TOP),
   );
 };
 
@@ -170,10 +180,12 @@ export const resolve = async (
   const national = topByScore(
     rows.filter((p) => fullGrams.has(p.g)),
     idf,
+    core,
   );
   const local = topByScore(
     rows.filter((p) => cityCodes.has(p.lg_code)),
     idf,
+    core,
   );
   const scores = new Map(
     [...national, ...local].map(([cn]) => [
