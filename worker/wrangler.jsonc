@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "queria-company-resolver",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-12-01",
+  "workers_dev": true,
+  "r2_buckets": [{ "binding": "DATA", "bucket_name": "queria" }],
+  "vars": {
+    // 索引の置き場 (export_parquet.py の出力を置いたプレフィックス)
+    "INDEX_PREFIX": "company-resolver/",
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+}
