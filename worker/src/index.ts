@@ -50,6 +50,12 @@ app.onError((err, c) => {
 // ブラウザの DuckDB (Queria の resolve_company) からも呼ぶ
 app.use("*", cors({ origin: "*", allowMethods: ["GET", "POST"] }));
 
+// DuckDB の read_json は GET の前に HEAD を送る。HEAD では照合せずに答え、D1 を 2 回引かず、回数にも数えない
+// (Hono は HEAD を GET の処理に回すので、元の要求のメソッドで見分ける)
+app.use("/v1/*", async (c, next) =>
+  c.req.raw.method === "HEAD" ? c.body(null, 200, { "content-type": "application/json" }) : next(),
+);
+
 // 鍵は呼んだ元の IP。上限は Cloudflare の拠点ごとに数えるので目安
 app.use("/v1/*", async (c, next) => {
   const ip = c.req.header("cf-connecting-ip");
