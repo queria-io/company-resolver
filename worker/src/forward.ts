@@ -33,8 +33,8 @@ const NATIONAL_READ_ROWS = 10_000;
 export type Input = { name: string; address?: string; limit?: number };
 
 type Gram = { g: string; df: number; idf: number };
-type City = { lg_code: string; prefecture_name: string; city_name: string };
-type Row = {
+export type City = { lg_code: string; prefecture_name: string; city_name: string };
+export type Row = {
   lg_code: string;
   corporate_number: string;
   legal_form: string | null;
@@ -131,10 +131,10 @@ const groupsFor = (file: ParquetFile, g: string, cityCodes?: ReadonlySet<string>
   );
 };
 
-type Ranked = { p: Row; ed: number; cityOk: boolean };
+export type Ranked = { p: Row; ed: number; cityOk: boolean };
 
 /** 照合の結果を応答の形にする */
-const answerOf = (
+export const answerOf = (
   input: Input,
   cities: readonly City[],
   cityCodes: ReadonlySet<string>,
