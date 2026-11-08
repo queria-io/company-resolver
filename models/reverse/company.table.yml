@@ -1,0 +1,50 @@
+schema: reverse
+name: company
+title: 法人の状態と変更履歴
+description: |-
+  法人ごとの最新の状態です。登記記録が閉鎖した法人も含み、旧商号と旧所在地を持ちます。
+
+  - 旧商号と旧所在地は、法人番号のデータセットの変更履歴にある分だけです。取り込みを始めた時点より前の変更は、一部の法人だけが持ちます
+  - shard（法人番号の下 3 桁）ごとにファイルを分け、法人番号の順に並べています
+keywords:
+  - 法人番号
+sources:
+  - path: https://www.houjin-bangou.nta.go.jp/
+fields:
+  - name: shard
+    title: ファイルの番号
+    description: "法人番号の下 3 桁"
+  - name: corporate_number
+    title: 法人番号
+  - name: name
+    title: 商号
+  - name: furigana
+    title: フリガナ
+  - name: kind
+    title: 法人種別
+    description: "101=国の機関、201=地方公共団体、301=株式会社、302=有限会社、303=合名会社、304=合資会社、305=合同会社、399=その他の設立登記法人、401=外国会社等、499=その他"
+  - name: prefecture_name
+    title: 都道府県名
+  - name: city_name
+    title: 市区町村名
+  - name: street_number
+    title: 丁目番地等
+  - name: lg_code
+    title: 全国地方公共団体コード
+    description: "6 桁（検査数字あり）"
+  - name: assignment_date
+    title: 法人番号指定年月日
+  - name: close_date
+    title: 登記記録の閉鎖等年月日
+  - name: close_cause
+    title: 登記記録の閉鎖等の事由
+    description: "01=清算の結了等、11=合併による解散等、21=登記官による閉鎖、31=その他の清算の結了等"
+  - name: successor_corporate_number
+    title: 承継先の法人番号
+    description: "合併で解散した法人の承継先"
+  - name: former_names
+    title: 旧商号
+    description: "古い順。until はその商号でなくなった日"
+  - name: former_addresses
+    title: 旧所在地
+    description: "古い順。until はその所在地でなくなった日"

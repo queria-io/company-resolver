@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: gram
+    description: |
+      bigram ごとの、その bigram を商号に含む法人の数と IDF です。照合で珍しい bigram から読むのに使います。
+      「国税庁法人番号公表サイト」（国税庁）（https://www.houjin-bangou.nta.go.jp/）を加工して作成。
+    access: public
+    columns:
+      - name: shard
+        data_type: integer
+      - name: g
+        data_type: varchar
+      - name: df
+        data_type: bigint
+      - name: idf
+        data_type: double

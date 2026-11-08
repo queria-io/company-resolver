@@ -1,0 +1,22 @@
+name: Sync
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+      - "worker/**" # Worker の変更ではデータを作り直さない
+  schedule:
+    - cron: "0 21 2 * *" # 法人番号のデータセットの月次の更新を受けて作り直す
+  workflow_dispatch:
+
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    uses: queria-io/dataset-shared/.github/workflows/sync.yml@main
+    with:
+      dataset_name: company_resolver
+    secrets: inherit

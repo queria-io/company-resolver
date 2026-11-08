@@ -2,3 +2,10 @@ out/
 *.parquet
 *.duckdb
 __pycache__/
+.venv/
+target/
+dbt_packages/
+logs/
+.user.yml
+package-lock.yml
+.fdl/

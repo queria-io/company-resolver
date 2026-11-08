@@ -1,0 +1,34 @@
+company_resolver:
+  target: default
+  outputs:
+    default:
+      type: duckdb
+      path: ":memory:"
+      database: company_resolver
+      schema: forward
+      threads: 1
+      extensions:
+        - httpfs
+        - ducklake
+        - sqlite
+      # ビルドが公開ストレージを読むときの名乗り (shared/scripts/build-fdl.sh が渡す)。
+      # custom_user_agent は接続を開くときにしか決められず、SET では変えられない
+      config_options:
+        custom_user_agent: "{{ env_var('QUERIA_USER_AGENT', '') }}"
+      attach:
+        # fdl checkout が作った作業場のカタログ (SQLite) に書く。新しいデータファイルは FDL_DATA_PATH に書き、
+        # fdl commit が上げる (shared/scripts/build-fdl.sh)
+        - path: "ducklake:{{ env_var('FDL_WORKING') }}"
+          alias: company_resolver
+          is_ducklake: true
+          options:
+            DATA_PATH: "{{ env_var('FDL_DATA_PATH') }}"
+            OVERRIDE_DATA_PATH: true
+            META_TYPE: "'sqlite'"
+            # 既定のままだと小さいテーブルがカタログの中に収まり parquet が生成されない
+            DATA_INLINING_ROW_LIMIT: 0
+        # 元にする法人番号のデータセット。読むだけ。テストの索引 (worker/test/make-fixture.py) は手元のカタログに差し替える
+        - path: "{{ env_var('HOUJIN_BANGOU', 'ducklake:https://data.queria.io/datasets/queria/houjin_bangou/ducklake.duckdb') }}"
+          alias: houjin_bangou
+          is_ducklake: true
+          read_only: true

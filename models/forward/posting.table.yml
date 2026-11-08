@@ -1,0 +1,31 @@
+schema: forward
+name: posting
+title: 商号の bigram 索引
+description: |-
+  商号を 2 文字ずつに分けた並び（bigram）ごとの法人の一覧です。法人格と空白・中黒・ハイフン類を除き、英字を大文字に、小書きの仮名を大きい仮名に正規化した商号から作ります。
+
+  - shard（bigram の文字のコードポイントの和を 1,024 で割った余り）ごとにファイルを分け、bigram と lg_code の順に並べています
+keywords:
+  - 法人番号
+sources:
+  - path: https://www.houjin-bangou.nta.go.jp/
+fields:
+  - name: shard
+    title: ファイルの番号
+    description: "bigram の文字のコードポイントの和を 1,024 で割った余り"
+  - name: g
+    title: bigram
+  - name: lg_code
+    title: 全国地方公共団体コード
+    description: "本店所在地の市区町村"
+  - name: corporate_number
+    title: 法人番号
+  - name: legal_form
+    title: 法人格
+    description: "株式会社・有限会社・合同会社・合資会社・合名会社。それ以外は NULL"
+  - name: core
+    title: 商号の本体
+    description: "法人格などを除いて正規化した商号"
+  - name: name
+    title: 商号
+    description: "NFKC で正規化した商号"

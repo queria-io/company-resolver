@@ -7,14 +7,14 @@ import { defineConfig, type Plugin } from "vitest/config";
 const FIXTURE_DIR = join(import.meta.dirname, "test/fixture");
 const MODULE_ID = "virtual:index-fixture";
 
-/** テストの索引 (test/fixture/ の Parquet) を { 相対パス: ArrayBuffer } として import できるようにする */
+/** テストの索引 (test/fixture/ の Parquet と目録) を { 相対パス: ArrayBuffer } として import できるようにする */
 const indexFixture: Plugin = {
   name: "index-fixture",
   resolveId: (id) => (id === MODULE_ID ? `\0${MODULE_ID}` : null),
   load(id) {
     if (id !== `\0${MODULE_ID}`) return null;
     const files = readdirSync(FIXTURE_DIR, { recursive: true, encoding: "utf8" })
-      .filter((f) => f.endsWith(".parquet"))
+      .filter((f) => f.endsWith(".parquet") || f.endsWith(".json"))
       .map((f) => [
         relative(FIXTURE_DIR, join(FIXTURE_DIR, f)),
         readFileSync(join(FIXTURE_DIR, f)).toString("base64"),
@@ -31,5 +31,12 @@ const indexFixture: Plugin = {
 
 export default defineConfig({
   test: { exclude: ["bench/**", "node_modules/**"] },
-  plugins: [indexFixture, cloudflareTest({ wrangler: { configPath: "./wrangler.jsonc" } })],
+  plugins: [
+    indexFixture,
+    cloudflareTest({
+      wrangler: { configPath: "./wrangler.jsonc" },
+      // 索引は test/fixture/ (test/make-fixture.py) を R2 の fixture/ に置いて読む
+      miniflare: { bindings: { DATA_SOURCE: "fixture/manifest.json" } },
+    }),
+  ],
 });

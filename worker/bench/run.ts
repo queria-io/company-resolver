@@ -1,13 +1,15 @@
-// 索引を手元のファイルから読んで、Worker と同じ resolve を EDINET の問い合わせで流す。
+// 索引を手元のファイルから読んで、Worker と同じ forward を EDINET の問い合わせで流す。
 // 正解率と、1 件あたりの R2 の読み込み回数・量・処理時間を出す。
 //
-// usage: pnpm tsx bench/run.ts <index_dir> <queries.jsonl>
+// usage: pnpm tsx bench/run.ts <manifest.json> <queries.jsonl>
+//   manifest.json: 索引の目録 (src/source.ts)。手元で dbt を流した索引は bench/manifest.py で作る
 //   queries.jsonl: 1 行に { "truth": 法人番号, "name": 商号, "address": 住所 }
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import type { ReadLog } from "../src/parquet";
-import { resolve } from "../src/resolve";
+import { forward } from "../src/forward";
+import { loadIndex } from "../src/source";
 
 type Query = { truth: string; name: string; address: string | null };
 
@@ -31,20 +33,22 @@ const fileBucket = (root: string) => ({
     // R2 と同じく、ファイルより長い suffix や末尾を越える length はファイルの範囲に収める
     const offset = r?.suffix !== undefined ? Math.max(0, size - r.suffix) : (r?.offset ?? 0);
     const length = Math.min(r?.length ?? size - offset, size - offset);
-    return { size, arrayBuffer: async () => readRange(path, offset, length) };
+    const arrayBuffer = async () => readRange(path, offset, length);
+    return { size, arrayBuffer, text: async () => new TextDecoder().decode(await arrayBuffer()) };
   },
 });
 
 const quantile = (xs: number[], q: number) =>
   [...xs].sort((a, b) => a - b)[Math.floor((xs.length - 1) * q)];
 
-const main = async (indexDir: string, queriesPath: string) => {
+const main = async (manifest: string, queriesPath: string) => {
   const queries: Query[] = readFileSync(queriesPath, "utf8")
     .trim()
     .split("\n")
     .map((l) => JSON.parse(l));
-  // fileBucket は R2Bucket のうち resolve が使う get だけを持つ
-  const bucket = fileBucket(indexDir) as unknown as R2Bucket;
+  // fileBucket は R2Bucket のうち forward が使う get だけを持つ
+  const bucket = fileBucket(dirname(manifest)) as unknown as R2Bucket;
+  const index = await loadIndex(bucket, basename(manifest));
   const stats = { matched: 0, matchedCorrect: 0, top1: 0, top5: 0 };
   const reads: number[] = [];
   const bytes: number[] = [];
@@ -52,9 +56,9 @@ const main = async (indexDir: string, queriesPath: string) => {
   for (const q of queries) {
     const log: ReadLog = { reads: 0, bytes: 0 };
     const t0 = performance.now();
-    const answer = await resolve(
+    const answer = await forward(
       bucket,
-      "",
+      index,
       { name: q.name, address: q.address ?? undefined },
       log,
     );

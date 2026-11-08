@@ -16,12 +16,11 @@ Worker（[worker/](worker/README.md)）の照合を、手元に置いた索引�
 - 手順
 
 ```bash
-cd prototype
-python build_index.py houjin.parquet out/
-python export_parquet.py out/ index/
-cd ../worker
-python bench/make-queries.py edinet.parquet queries/
-pnpm tsx bench/run.ts ../prototype/index queries/clean.jsonl
+# 索引を手元で作る (法人番号のデータセットは data.queria.io から読む)
+FDL_WORKING=/tmp/cr/work.sqlite FDL_DATA_PATH=/tmp/cr/data/ uv run dbt run
+uv run python worker/bench/manifest.py /tmp/cr/work.sqlite /tmp/cr/data
+uv run python worker/bench/make-queries.py edinet.parquet /tmp/cr/queries
+cd worker && pnpm tsx bench/run.ts /tmp/cr/data/manifest.json /tmp/cr/queries/clean.jsonl
 ```
 
 ## 結果（2026-11-08）
@@ -35,10 +34,10 @@ pnpm tsx bench/run.ts ../prototype/index queries/clean.jsonl
 
 | 入力 | R2 の読み込み回数 | 読み込み量 | 処理時間 |
 |---|---|---|---|
-| 正しい名前＋住所 | 30 / 60 / 73 回 | 846 / 1,874 / 2,349 KB | 61 / 135 / 198 ms |
-| 誤字あり＋住所 | 24 / 57 / 73 回 | 684 / 1,771 / 2,322 KB | 47 / 124 / 199 ms |
+| 正しい名前＋住所 | 26 / 54 / 66 回 | 946 / 2,057 / 2,463 KB | 94 / 194 / 269 ms |
+| 誤字あり＋住所 | 20 / 51 / 64 回 | 744 / 1,958 / 2,416 KB | 75 / 185 / 268 ms |
 
-値は中央値 / 90 パーセンタイル / 99 パーセンタイル。処理時間は Node.js で手元のファイルから読んだときのもので、R2 の待ち時間を含まない。R2 への往復は 2 回で、同じ往復の中の読み込みは並列に行う（フッターが 32 KB を超えるファイルだけ 3 回目の往復がある）。
+値は中央値 / 90 パーセンタイル / 99 パーセンタイル。処理時間は Node.js で手元のファイルから読んだときのもので、R2 の待ち時間を含まない。R2 への往復は 2 回で、同じ往復の中の読み込みは並列に行う。手元の計測は目録にフッターの長さが無いので末尾 32 KB を読み、フッターが 32 KB を超えるファイルだけ 3 回目の往復がある。本番は FDL の files.json にあるフッターの長さだけを読む。索引はデータセット（dbt）で作ったもの（行グループは 2,048 行）
 
 ### R2 に置いた Worker の応答時間
 

@@ -1,0 +1,50 @@
+# この dataset.yml は fdl commit が読む（FDL の dataset.json を YAML で書いたもの）。
+# テーブルの説明は models/ の *.table.yml に書く。列の型・NULL・行数は fdl commit がカタログから埋める。
+name: company_resolver
+title: 法人名寄せ用 索引
+description: |-
+  企業名から法人番号を照合するための索引と、法人番号から法人の状態・旧商号・旧所在地を引くためのテーブルです。Queria Company Resolver（company-resolver.queria.io）がこのテーブルを読みます。
+
+  出典：国税庁法人番号公表サイト（国税庁）。Queria が加工したものです。公共データ利用規約（第1.0版）に準拠した利用条件のもとで再配布しています。最新性・正確性・完全性等が保証されたものではありません。
+keywords:
+  - 法人番号
+  - 名寄せ
+  - 企業マスタ
+homepage: https://github.com/queria-io/company-resolver
+language: ja
+
+licenses:
+  - JP-PDL-1.0
+
+sources:
+  - title: 国税庁法人番号公表サイト（国税庁）
+    path: https://www.houjin-bangou.nta.go.jp/
+
+contributors:
+  - title: 国税庁
+    path: https://www.nta.go.jp/
+    roles: [rightsHolder]
+
+spatial_coverage: [JP]
+update_frequency: monthly
+
+schemas:
+  - name: forward
+    title: 正引き
+  - name: reverse
+    title: 逆引き
+
+annotations:
+  queria:
+    themes: [economy]
+    cover: 🏢
+    ai_context:
+      instructions: |
+        Queria Company Resolver が読む索引。企業名から法人番号を引くときは、SQL の resolve_company 関数か
+        company-resolver.queria.io/v1/forward を使う。forward.company_name は商号を NFKC で正規化した現存法人の一覧。
+        reverse.company は閉鎖した法人も含む法人ごとの最新の状態で、旧商号 (former_names) と旧所在地 (former_addresses) を持つ。
+        結合キーは corporate_number（法人番号）と lg_code（市区町村）。
+      synonyms: [名寄せ, 法人名寄せ, Company Resolver]
+      examples:
+        - 旧商号から今の法人番号を引きたい
+        - 閉鎖した法人の承継先を知りたい
