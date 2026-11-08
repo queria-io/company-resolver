@@ -103,4 +103,91 @@ describe("/v1/forward", () => {
     );
     expect(Number(res.headers.get("X-D1-Rows-Read"))).toBeGreaterThan(0);
   });
+
+  it("商号が同じ法人で決まれば、bigram の索引は引かない", async () => {
+    const rowsRead = async (query: Record<string, string>) =>
+      Number(
+        (await app.request(`/v1/forward?${new URLSearchParams(query)}`, {}, env)).headers.get(
+          "X-D1-Rows-Read",
+        ),
+      );
+    const exact = await rowsRead({ name: "株式会社クエリア", address: "東京都千代田区" });
+    const fuzzy = await rowsRead({ name: "株式会社クエア", address: "東京都千代田区" });
+    expect(exact).toBeLessThan(fuzzy);
+  });
+});
+
+const batch = (body: unknown) =>
+  app.request(
+    "/v1/forward/batch",
+    { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } },
+    env,
+  );
+
+describe("/v1/forward/batch", () => {
+  it("問い合わせと同じ順に、1 件ずつの正引きと同じ応答を返す", async () => {
+    const queries: Record<string, string>[] = [
+      { name: "株式会社クエア", address: "東京都千代田区" },
+      { name: "株式会社クエリア", address: "東京都千代田区紀尾井町1-3" },
+      { name: "存在しない名前" },
+      { name: "株式会社クエリア" },
+    ];
+    const res = await batch({ queries });
+    expect(res.status).toBe(200);
+    const { results } = (await res.json()) as { results: (Answer & { input: unknown })[] };
+    expect(results.map((r) => r.status)).toEqual([
+      "candidates",
+      "matched",
+      "not_found",
+      "ambiguous",
+    ]);
+    for (const [i, q] of queries.entries()) {
+      expect(results[i]).toEqual({
+        input: { name: q.name, address: q.address ?? null },
+        ...(await forward(q)),
+      });
+    }
+  });
+
+  it("GET では name と address を繰り返して渡す", async () => {
+    const params = new URLSearchParams([
+      ["name", "株式会社クエリア"],
+      ["address", "東京都千代田区紀尾井町1-3"],
+      ["name", "株式会社クエア"],
+      ["address", ""],
+    ]);
+    const res = await app.request(`/v1/forward/batch?${params}`, {}, env);
+    expect(res.status).toBe(200);
+    const { results } = (await res.json()) as { results: (Answer & { input: unknown })[] };
+    expect(results.map((r) => [r.input, r.status])).toEqual([
+      [{ name: "株式会社クエリア", address: "東京都千代田区紀尾井町1-3" }, "matched"],
+      [{ name: "株式会社クエア", address: null }, "candidates"],
+    ]);
+  });
+
+  it("GET で address の数が name と違えば 400", async () => {
+    const params = new URLSearchParams([
+      ["name", "クエリア"],
+      ["name", "テスト"],
+      ["address", "東京都"],
+    ]);
+    const res = await app.request(`/v1/forward/batch?${params}`, {}, env);
+    expect(res.status).toBe(400);
+  });
+
+  it("問い合わせが 100 件を超えれば 400", async () => {
+    const res = await batch({ queries: Array.from({ length: 101 }, () => ({ name: "クエリア" })) });
+    expect(res.status).toBe(400);
+  });
+
+  it("name の無い問い合わせがあれば、その位置を示して 400", async () => {
+    const res = await batch({ queries: [{ name: "クエリア" }, { address: "東京都" }] });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain("queries[1]");
+  });
+
+  it("本文が JSON でなければ 400", async () => {
+    const res = await app.request("/v1/forward/batch", { method: "POST", body: "x" }, env);
+    expect(res.status).toBe(400);
+  });
 });
