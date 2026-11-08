@@ -11,12 +11,17 @@ export type Env = {
 };
 
 const MAX_LIMIT = 20;
+/** name の文字数の上限。R2 の読み込みは name の bigram が入るファイルの数に比例するため、上限を置く */
+const MAX_NAME_LENGTH = 200;
 
 const app = new Hono<{ Bindings: Env }>();
 
 app.get("/v1/resolve", async (c) => {
   const name = c.req.query("name")?.trim();
   if (!name) return c.json({ error: "name は必須です" }, 400);
+  if (Array.from(name).length > MAX_NAME_LENGTH) {
+    return c.json({ error: `name は ${MAX_NAME_LENGTH} 文字以内にしてください` }, 400);
+  }
   const limit = Math.min(MAX_LIMIT, Math.max(1, Number(c.req.query("limit") ?? 5) || 5));
   const log: ReadLog = { reads: 0, bytes: 0 };
   const answer = await resolve(

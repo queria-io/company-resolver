@@ -12,11 +12,11 @@ GET /v1/resolve?name=株式会社クエリア&address=東京都千代田区紀�
 
 `prototype/export_parquet.py` が書き出す。置き場は `wrangler.jsonc` の `INDEX_PREFIX`。
 
-- `posting/shard=NNN.parquet`: bigram ごとの法人（商号・法人格・lg_code つき）。bigram と lg_code の順に並べ、行グループは 4,096 行
-- `gram/shard=NNN.parquet`: bigram ごとの出現する法人の数（df）と IDF
+- `posting/shard=NNNN.parquet`: bigram ごとの法人（商号・法人格・lg_code つき）。bigram と lg_code の順に並べ、行グループは 1,024 行
+- `gram/shard=NNNN.parquet`: bigram ごとの出現する法人の数（df）と IDF
 - `city.parquet`: 市区町村の lg_code・都道府県名・市区町村名
 
-`NNN` は bigram の文字のコードポイントの和を 256 で割った余り。1 件の問い合わせで R2 を読むのは 2 回の往復で、1 回目に `gram` と `posting` のフッターと `city.parquet`、2 回目に `posting` の行グループを読む。
+`NNNN` は bigram の文字のコードポイントの和を 1,024 で割った余り。1 件の問い合わせで R2 を読むのは 2 回の往復で、1 回目に `gram` と `posting` のフッターと `city.parquet`、2 回目に `posting` の行グループを読む。
 
 ## コマンド
 

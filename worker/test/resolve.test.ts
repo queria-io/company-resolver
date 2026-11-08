@@ -73,4 +73,13 @@ describe("/v1/resolve", () => {
     const res = await app.request("/v1/resolve", {}, env);
     expect(res.status).toBe(400);
   });
+
+  it("name が長すぎれば 400", async () => {
+    const res = await app.request(
+      `/v1/resolve?${new URLSearchParams({ name: "ア".repeat(201) })}`,
+      {},
+      env,
+    );
+    expect(res.status).toBe(400);
+  });
 });

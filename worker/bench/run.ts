@@ -28,8 +28,9 @@ const fileBucket = (root: string) => ({
     if (!existsSync(path)) return null;
     const size = statSync(path).size;
     const r = options?.range;
-    const offset = r?.suffix !== undefined ? size - r.suffix : (r?.offset ?? 0);
-    const length = r?.suffix ?? r?.length ?? size - offset;
+    // R2 と同じく、ファイルより長い suffix や末尾を越える length はファイルの範囲に収める
+    const offset = r?.suffix !== undefined ? Math.max(0, size - r.suffix) : (r?.offset ?? 0);
+    const length = Math.min(r?.length ?? size - offset, size - offset);
     return { size, arrayBuffer: async () => readRange(path, offset, length) };
   },
 });

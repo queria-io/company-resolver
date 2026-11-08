@@ -1,5 +1,13 @@
 // 企業名と住所から法人番号の候補を返す。規則は DESIGN.md、索引の形は prototype/export_parquet.py
-import { bigrams, coreName, legalForm, levenshtein, nfkc, shardOf } from "./normalize";
+import {
+  bigrams,
+  compareCodePoints,
+  coreName,
+  legalForm,
+  levenshtein,
+  nfkc,
+  shardOf,
+} from "./normalize";
 import {
   columnStats,
   openFile,
@@ -87,7 +95,12 @@ const topByScore = (
       acc.set(r.corporate_number, (acc.get(r.corporate_number) ?? 0) + (idf.get(r.g) ?? 0)),
     new Map<string, number>(),
   );
-  const distance = new Map(rows.map((r) => [r.corporate_number, levenshtein(core, r.core)]));
+  // 法人ごとに 1 回だけ計算する (rows には同じ法人が bigram の数だけある)
+  const distance = new Map<string, number>();
+  for (const r of rows) {
+    if (!distance.has(r.corporate_number))
+      distance.set(r.corporate_number, levenshtein(core, r.core));
+  }
   return new Map(
     [...scores]
       .sort(
@@ -98,13 +111,16 @@ const topByScore = (
   );
 };
 
-/** 読む行グループ: bigram g の行が入りうるもの。cityCodes を渡すと、その市区町村の行が入りうるものだけ */
+/**
+ * 読む行グループ: bigram g の行が入りうるもの。cityCodes を渡すと、その市区町村の行が入りうるものだけ。
+ * 統計の最小・最大はコードポイント順なので、UTF-16 の順になる演算子 (<=) では比べない
+ */
 const groupsFor = (file: ParquetFile, g: string, cityCodes?: ReadonlySet<string>): number[] => {
   const gs = columnStats(file.metadata, "g");
   const ls = columnStats(file.metadata, "lg_code");
   return gs.flatMap((s, i) =>
-    s.min <= g &&
-    g <= s.max &&
+    compareCodePoints(s.min, g) <= 0 &&
+    compareCodePoints(g, s.max) <= 0 &&
     (cityCodes === undefined || [...cityCodes].some((c) => ls[i].min <= c && c <= ls[i].max))
       ? [i]
       : [],

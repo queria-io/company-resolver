@@ -9,8 +9,8 @@ const LEGAL_FORMS = [
 ] as const;
 
 const LEGAL_FORM_PATTERN = /株式会社|有限会社|合同会社|合資会社|合名会社|\((株|有|同|資|名)\)/g;
-// 空白・中黒・ハイフン類
-const SEPARATORS = /[\s・‐―−–—-]/g;
+// 空白・中黒・ハイフン類。空白は normalize.sql (RE2 の \s) と同じ ASCII の空白だけにする
+const SEPARATORS = /[\t\n\f\r ・‐―−–—-]/g;
 // 商業登記では小書きの仮名を使えないため、大きい仮名に揃える
 const SMALL_KANA = "ァィゥェォッャュョヮヵヶぁぃぅぇぉっゃゅょゎ";
 const LARGE_KANA = "アイウエオツヤユヨワカケあいうえおつやゆよわ";
@@ -46,16 +46,25 @@ export const shardOf = (gram: string, shards: number): number =>
 export const levenshtein = (a: string, b: string): number => {
   const x = Array.from(a);
   const y = Array.from(b);
-  const last = x.reduce(
-    (prev, cx, i) =>
-      y.reduce<number[]>(
-        (row, cy, j) => [
-          ...row,
-          Math.min(prev[j + 1] + 1, row[j] + 1, prev[j] + (cx === cy ? 0 : 1)),
-        ],
-        [i + 1],
-      ),
-    Array.from({ length: y.length + 1 }, (_, j) => j),
-  );
-  return last[y.length];
+  let prev = Array.from({ length: y.length + 1 }, (_, j) => j);
+  for (let i = 0; i < x.length; i++) {
+    const row = [i + 1];
+    for (let j = 0; j < y.length; j++) {
+      row.push(Math.min(prev[j + 1] + 1, row[j] + 1, prev[j] + (x[i] === y[j] ? 0 : 1)));
+    }
+    prev = row;
+  }
+  return prev[y.length];
+};
+
+/** コードポイント順の比較。Parquet の文字列の統計 (UTF-8 のバイト順) と同じ順になる */
+export const compareCodePoints = (a: string, b: string): number => {
+  const x = Array.from(a);
+  const y = Array.from(b);
+  const n = Math.min(x.length, y.length);
+  for (let i = 0; i < n; i++) {
+    const d = (x[i].codePointAt(0) ?? 0) - (y[i].codePointAt(0) ?? 0);
+    if (d !== 0) return d;
+  }
+  return x.length - y.length;
 };

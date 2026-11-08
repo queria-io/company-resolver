@@ -81,7 +81,7 @@ export const columnStats = (metadata: FileMetaData, column: string): Stats[] => 
     const stats = group.columns[index]?.meta_data?.statistics;
     return {
       min: String(stats?.min_value ?? stats?.min ?? ""),
-      max: String(stats?.max_value ?? stats?.max ?? "￿"),
+      max: String(stats?.max_value ?? stats?.max ?? "\u{10FFFF}"),
     };
   });
 };
