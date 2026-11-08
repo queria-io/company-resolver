@@ -1,4 +1,4 @@
-// 逆引きの索引のファイルの置き場を引く (正引きの索引は D1)。Worker が知るのは置き場 (DATA_SOURCE) だけにする。
+// 逆引きの索引のファイルの置き場を引く (正引きの索引は静的アセット。src/assets.ts)。Worker が知るのは置き場 (DATA_SOURCE) だけにする。
 //   - 「…/」: FDL のリポジトリ (Queria の company_resolver データセット)。refs/heads/main が指すバージョンの
 //     files.json (テーブルごとのファイル一覧) から引く。毎月の Sync で main が進めば、デプロイなしで読む先が切り替わる
 //   - 「….json」: 目録。{ "version": "…", "tables": { "reverse.company": ["reverse/company/shard=001/a.parquet"], … } }。

@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "build": "pnpm build:data",
+    "build:data": "node scripts/build-data.mjs",
+    "deploy": "pnpm build && wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "oxlint && oxfmt --check .",

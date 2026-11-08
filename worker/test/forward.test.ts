@@ -1,19 +1,8 @@
 import { env } from "cloudflare:test";
-import { beforeAll, describe, expect, it } from "vitest";
-
-import fixtures from "virtual:index-fixture";
+import { describe, expect, it } from "vitest";
 
 import app from "../src/index";
 import type { Answer } from "../src/forward";
-
-// 正引きの索引: scripts/sync_d1.py が全件を入れるときと同じ文 (test/make-fixture.py) を D1 に流す
-beforeAll(async () => {
-  const statements = new TextDecoder()
-    .decode(fixtures["forward.sql"])
-    .split(";\n")
-    .filter((s) => s.trim() !== "");
-  await env.DB.batch(statements.map((s) => env.DB.prepare(s)));
-});
 
 const forward = async (query: Record<string, string>): Promise<Answer> => {
   const res = await app.request(`/v1/forward?${new URLSearchParams(query)}`, {}, env);
@@ -95,20 +84,20 @@ describe("/v1/forward", () => {
     expect(res.status).toBe(400);
   });
 
-  it("D1 から読んだ行数をヘッダーで返す", async () => {
+  it("読んだファイルの数をヘッダーで返す", async () => {
     const res = await app.request(
       `/v1/forward?${new URLSearchParams({ name: "株式会社クエリア" })}`,
       {},
       env,
     );
-    expect(Number(res.headers.get("X-D1-Rows-Read"))).toBeGreaterThan(0);
+    expect(Number(res.headers.get("X-Asset-Reads"))).toBeGreaterThan(0);
   });
 
   it("商号が同じ法人で決まれば、bigram の索引は引かない", async () => {
     const rowsRead = async (query: Record<string, string>) =>
       Number(
         (await app.request(`/v1/forward?${new URLSearchParams(query)}`, {}, env)).headers.get(
-          "X-D1-Rows-Read",
+          "X-Asset-Reads",
         ),
       );
     const exact = await rowsRead({ name: "株式会社クエリア", address: "東京都千代田区" });
@@ -172,13 +161,13 @@ describe("/v1/forward/batch", () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get("X-D1-Rows-Read")).toBeNull();
+    expect(res.headers.get("X-Asset-Reads")).toBeNull();
     const single = await app.request(
       `/v1/forward?${new URLSearchParams({ name: "株式会社クエリア" })}`,
       { method: "HEAD" },
       env,
     );
-    expect(single.headers.get("X-D1-Rows-Read")).toBeNull();
+    expect(single.headers.get("X-Asset-Reads")).toBeNull();
   });
 
   it("GET で address の数が name と違えば 400", async () => {

@@ -7,7 +7,7 @@ import { defineConfig, type Plugin } from "vitest/config";
 const FIXTURE_DIR = join(import.meta.dirname, "test/fixture");
 const MODULE_ID = "virtual:index-fixture";
 
-/** テストの索引 (test/fixture/ の Parquet・目録・D1 に流す SQL) を { 相対パス: ArrayBuffer } として import できるようにする */
+/** テストの索引 (test/fixture/ の Parquet と目録) を { 相対パス: ArrayBuffer } として import できるようにする */
 const indexFixture: Plugin = {
   name: "index-fixture",
   resolveId: (id) => (id === MODULE_ID ? `\0${MODULE_ID}` : null),
@@ -36,7 +36,11 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
       // 逆引きの索引は test/fixture/ (test/make-fixture.py) を R2 の fixture/ に置いて読む
-      miniflare: { bindings: { DATA_SOURCE: "fixture/manifest.json" } },
+      // 正引きの索引は test/fixture/assets/ を静的アセットとして読む
+      miniflare: {
+        bindings: { DATA_SOURCE: "fixture/manifest.json" },
+        assets: { directory: join(FIXTURE_DIR, "assets"), binding: "ASSETS" },
+      },
     }),
   ],
 });

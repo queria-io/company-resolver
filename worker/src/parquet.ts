@@ -11,7 +11,7 @@ import {
 import type { FileRef } from "./source";
 
 // 索引は zstd で書いている (dbt_project.yml の parquet_compression)。fzstd は純粋な JS なので Workers でそのまま動く
-const compressors: Compressors = { ZSTD: (input) => decompress(input) };
+export const compressors: Compressors = { ZSTD: (input) => decompress(input) };
 
 /** 1 回の問い合わせで R2 から読んだ回数と量 */
 export type ReadLog = { reads: number; bytes: number };

@@ -4,7 +4,7 @@ usage (リポジトリの直下で): uv run python worker/test/make-fixture.py
 
 本番と同じ dbt のモデルを、法人番号のデータセットの代わりに手元のカタログ (下の架空の法人) に向けて流す。
 - 逆引き: Parquet と、そのファイルの一覧 test/fixture/manifest.json (Worker は目録から読む。src/source.ts)
-- 正引き: D1 に流す SQL test/fixture/forward.sql (scripts/sync_d1.py で全件を入れるときと同じ文)
+- 正引き: 静的アセットに置くファイル test/fixture/assets/ (本番と同じく scripts/build-data.mjs が置く)
 法人は架空のもの。並びと規則を試すために、同じ商号を別の市区町村に置いている
 """
 import json
@@ -19,8 +19,7 @@ from pathlib import Path
 import duckdb
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "scripts"))
-from sync_d1 import full, swap, write_files  # noqa: E402
+FORWARD = ["exact_name", "gram", "posting_rare", "posting_common", "city"]
 
 FIXTURE = Path(__file__).resolve().parent / "fixture"
 
@@ -81,22 +80,35 @@ def main() -> None:
             "FDL_WORKING": str(tmp / "work.sqlite"),
             "FDL_DATA_PATH": f"{FIXTURE}/",
         }
-        subprocess.run(["dbt", "run", "--quiet"], cwd=ROOT, env=env, check=True)
+        # 共通の bigram (posting_common) の経路も試すよう、共通とみなす出現数を小さくする
+        subprocess.run(
+            ["dbt", "run", "--quiet", "--vars", '{"forward_national_rows": 2}'], cwd=ROOT, env=env, check=True
+        )
         con = duckdb.connect()
         con.execute(f"ATTACH 'ducklake:sqlite:{tmp}/work.sqlite' AS c (READ_ONLY)")
         write_manifest(con)
-        sql = list(write_files([*full(con, "c"), *swap()], tmp / "sql"))
-        (FIXTURE / "forward.sql").write_text("".join(f.read_text(encoding="utf-8") for f in sql), encoding="utf-8")
+        subprocess.run(
+            ["node", "scripts/build-data.mjs", "--manifest", str(FIXTURE / "manifest.json"), str(FIXTURE / "assets")],
+            cwd=ROOT / "worker", check=True,
+        )
         shutil.rmtree(FIXTURE / "forward")
+        # 正引きのファイルは assets/ にあるので、目録には逆引きだけを残す
+        manifest = json.loads((FIXTURE / "manifest.json").read_text())
+        manifest["tables"] = {"reverse.company": manifest["tables"]["reverse.company"]}
+        (FIXTURE / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 def write_manifest(con: duckdb.DuckDBPyConnection) -> None:
-    """逆引きの表のファイルの一覧 (FIXTURE からの相対パス) を書く"""
-    files = con.execute(
-        "SELECT data_file FROM ducklake_list_files('c', 'company', schema => 'reverse')"
-    ).fetchall()
-    paths = sorted(Path(f).resolve().relative_to(FIXTURE.resolve()).as_posix() for (f,) in files)
-    manifest = {"version": "local", "tables": {"reverse.company": paths}}
+    """表のファイルの一覧 (FIXTURE からの相対パス) を書く"""
+    def files(schema: str, table: str) -> list[str]:
+        rows = con.execute(
+            "SELECT data_file FROM ducklake_list_files('c', ?, schema => ?)", [table, schema]
+        ).fetchall()
+        return sorted(Path(f).resolve().relative_to(FIXTURE.resolve()).as_posix() for (f,) in rows)
+
+    tables = {"reverse.company": files("reverse", "company")}
+    tables.update({f"forward.{t}": files("forward", t) for t in FORWARD})
+    manifest = {"version": "local", "tables": tables}
     (FIXTURE / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 

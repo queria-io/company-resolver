@@ -52,3 +52,10 @@ export const levenshtein = (a: string, b: string): number => {
   }
   return prev[y.length];
 };
+
+/** 静的アセットのファイルの番号。文字のコードポイントの和を n で割った余り (macros/normalize.sql の codepoint_shard) */
+export const shardOf = (s: string, n: number): number =>
+  Array.from(s).reduce((sum, c) => sum + (c.codePointAt(0) ?? 0), 0) % n;
+
+/** 市区町村の区分。lg_code を数として n で割った余り (macros/normalize.sql の city_bucket) */
+export const cityBucket = (lgCode: string, n: number): number => (Number(lgCode) || 0) % n;
