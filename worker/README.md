@@ -1,6 +1,6 @@
 # Worker
 
-法人名寄せ API（https://company-resolver.queria.io）。Cloudflare Workers で動く。正引きの索引は D1 に、逆引きの索引は Parquet で R2 に置く（どちらも Queria のデータセットから作る）。照合の規則は [../DESIGN.md](../DESIGN.md)。
+法人名寄せ API（https://company-resolver.queria.io）。Cloudflare Workers で動く。正引きの索引は Worker と一緒にデプロイする静的アセットに、逆引きの索引は Parquet で R2 に置く（どちらも Queria のデータセットから作る）。照合の規則は [../DESIGN.md](../DESIGN.md)。
 
 正引きは企業名（と住所）から法人番号の候補を返す。
 
@@ -8,9 +8,9 @@
 GET /v1/forward?name=株式会社クエリア&address=東京都千代田区紀尾井町1-3&limit=5
 ```
 
-`name` と `address` は 200 文字まで。応答は `status`（`matched` / `ambiguous` / `candidates` / `not_found`）、`same_name_count`、`candidates`（法人番号・商号・都道府県・市区町村・`evidence`）。ヘッダーの `X-D1-Rows-Read` は、その問い合わせで D1 から読んだ行数。
+`name` と `address` は 200 文字まで。応答は `status`（`matched` / `ambiguous` / `candidates` / `not_found`）、`same_name_count`、`candidates`（法人番号・商号・都道府県・市区町村・`evidence`）。ヘッダーの `X-Asset-Reads`・`X-Asset-Bytes` は、その問い合わせで読んだ索引のファイルの数とバイト数。
 
-複数の企業をまとめて照合するときは、1 回に 20 件までを `POST /v1/forward/batch` に渡す。応答の `results` は、`queries` と同じ順に、1 件ずつの正引きと同じ形の応答を並べたもの。IP ごとに 1 分 10 回まで（`BATCH_LIMITER`）。D1 が混み合って断ったときは 503 と `Retry-After` を返す。
+複数の企業をまとめて照合するときは、1 回に 20 件までを `POST /v1/forward/batch` に渡す。応答の `results` は、`queries` と同じ順に、1 件ずつの正引きと同じ形の応答を並べたもの。IP ごとに 1 分 10 回まで（`BATCH_LIMITER`）。
 
 ```
 POST /v1/forward/batch
@@ -31,26 +31,21 @@ GET /v1/reverse?corporate_number=1180301018771
 
 リポジトリの直下の dbt のデータセット（Queria の `company_resolver`）。毎月 `.github/workflows/sync.yml` が法人番号のデータセットから作り直す。
 
-### 正引き（D1）
+### 正引き（静的アセット）
 
-`scripts/sync_d1.py` が、FDL の `refs/heads/main` が指すバージョンの `forward` の表（`company_core`・`posting`・`gram`・`city`）を D1（`wrangler.jsonc` の `DB`）に入れる。Sync のあとに同じ workflow の `d1` ジョブが流す。
+`pnpm build:data`（`scripts/build-data.mjs`）が、FDL の `refs/heads/main` が指すバージョンの `forward` の表のファイルを `public/data/` に置き、Worker と一緒にデプロイする。静的アセットはファイルを丸ごとしか読めないので、dbt の表はパーティションごとに 1 つのファイルにしてあり、置き場所はパーティションの値で決まる（Worker は目録を読まずにパスを組み立てる）。分ける数は `../dbt_project.yml` の `vars` と `src/forward.ts` で揃える。
 
-- `company`: 法人番号ごとの商号の本体・法人格・lg_code・商号。商号の本体に索引
-- `posting`: bigram・lg_code・法人番号（主キー）
-- `gram`: bigram ごとの出現する法人の数（df）と IDF
-- `city`: 市区町村の lg_code・都道府県名・市区町村名。Worker は 5 分ごとに読み直す
-- `meta`: 最後に反映したバージョンの ID（`version`）、テーブルの定義のバージョン（`schema`）、反映の途中ならその反映先（`applying`）
+| 表 | 置き場所 | 中身 |
+|---|---|---|
+| `exact_name` | `data/exact_name/{shard}.parquet` | 商号の本体ごとの法人（商号・法人格・lg_code）。商号の本体のコードポイントの和を 8,192 で割った余り |
+| `gram` | `data/gram/{shard}.parquet` | bigram ごとの出現する法人の数（df）・IDF・共通の bigram の番号（`common_id`）。1,024 個 |
+| `posting_rare` | `data/posting_rare/{shard}.parquet` | 出現する法人が 10,000 以下の bigram ごとの法人（商号・法人格・lg_code つき）。8,192 個 |
+| `posting_common` | `data/posting_common/{common_id}/{bucket}.parquet` | 出現する法人が 10,000 を超える bigram ごとの法人。`bucket` は lg_code を 64 で割った余り |
+| `city` | `data/city.parquet` | 市区町村の lg_code・都道府県名・市区町村名。Worker は isolate の中で 1 回だけ読む |
 
-正引きは、まず `company` で商号の本体が同じ法人を引く。商号と法人格（住所があれば市区町村も）が一致する法人が 1 件だけなら、それで答える。決まらないときだけ、`gram`・`posting`・`company` で近い商号を引き、候補を編集距離で並べる（D1 への往復は 2 回）。まとめて照合するときは、問い合わせごとの文をそれぞれの往復で 1 つの batch にまとめる。
+正引きは、まず `exact_name` のファイルを 1 つ読み、商号と法人格（住所があれば市区町村も）が一致する法人が 1 件だけなら答える。決まらないときだけ、入力の bigram の `gram` のファイルを読んで出現する法人が少ない 8 個を選び、全国で読む bigram は `posting_rare` のファイル（共通の bigram なら 64 個の区分すべて）を、残りは住所の市区町村の区分のファイルだけを読む。まとめて照合するときは、同じファイルを 1 回だけ読む。
 
-反映は、`meta` のバージョンと新しいバージョンの `forward.company_core`・`forward.posting` を比べ、変わった行だけを主キーで消す・書く。`gram` と `city` は毎回全部を書き直す。書き終えたら法人数と `posting` の行数を元データと照合し、合っていれば最後に `meta` を書く。途中で失敗したら同じコマンドを流し直せばよい（書き始める前に `meta` の `applying` に反映先のバージョンを書き、流し直す前に main が別のバージョンに進んでいたら全件を入れ直す）。
-
-`meta` の `schema`（`sync_d1.py` の `SCHEMA` から作るテーブルの定義のバージョン）が違うとき、前のバージョンのカタログを読めないとき、`--full` のときは、全件を `company_next` などの別の表に入れ、照合が合ったら今の表と入れ替える。入れ替えるまで正引きは今の表を引く。入れ替えと `meta` の書き込みは 1 回の要求で流すので、途中で失敗しても新旧の表が混ざらない。入れ替えるあいだは、D1 の大きさが一時的に 2 倍になる。
-
-```bash
-uv run python scripts/sync_d1.py          # リポジトリの直下で。wrangler login か CLOUDFLARE_API_TOKEN が要る
-uv run python scripts/sync_d1.py --full   # 行数が合わないと言われたら全件を入れ直す
-```
+データセットの main が進んだら、Worker をビルドし直してデプロイする（下のデプロイ）。
 
 ### 逆引き（R2）
 
@@ -59,16 +54,16 @@ Worker は DuckLake のカタログを読まず、FDL の `refs/heads/main` が�
 ## コマンド
 
 ```bash
-uv run pytest    # リポジトリの直下で。sync_d1.py の差分の反映が全件の入れ直しと一致するか
-pnpm test        # vitest (Workers ランタイム)。索引は test/fixture/ (リポジトリの直下で uv run python worker/test/make-fixture.py)。正引きは forward.sql を D1 に流す
+pnpm build:data  # 正引きの索引を public/data/ に置く (データセットの main から)
+pnpm test        # vitest (Workers ランタイム)。索引は test/fixture/ (リポジトリの直下で uv run python worker/test/make-fixture.py)。正引きは test/fixture/assets/ を静的アセットとして読む
 pnpm typecheck
 pnpm check       # oxlint + oxfmt --check
-pnpm tsx bench/run.ts <index.sqlite> <queries.jsonl>   # 手元の SQLite で正解率と処理時間を計測 (手順は ../BENCHMARK.md)
+pnpm tsx bench/run.ts <queries.jsonl>   # 手元の public/data/ で正解率と読んだファイル・処理時間を計測 (手順は ../BENCHMARK.md)
 node bench/latency.mjs https://company-resolver.queria.io   # 手元から API の応答時間を計測
 ```
 
 ## デプロイ
 
-Cloudflare の Workers Builds が、`main` に入った変更を `npx wrangler deploy` で本番（`queria-company-resolver`）にデプロイする。PR をマージすると本番に出る。`main` 以外のブランチへの push は `npx wrangler versions upload` で、本番に出さないバージョンだけを作る。どちらもルートは `worker/`。
+Cloudflare の Workers Builds が、`main` に入った変更を、ビルドのコマンド `pnpm build:data` で正引きの索引を置いてから `npx wrangler deploy` で本番（`queria-company-resolver`）にデプロイする。PR をマージすると本番に出る。`main` 以外のブランチへの push は `npx wrangler versions upload` で、本番に出さないバージョン（プレビューの URL）だけを作る。どちらもルートは `worker/`。
 
-正引きの索引（D1）は Worker のデプロイとは別に、`.github/workflows/sync.yml` の `d1` ジョブが反映する。D1 のテーブルを変える PR は、マージの前に `uv run python scripts/sync_d1.py` で D1 を新しい形にしておく（Worker のデプロイより先に表が入れ替わるので、変更前の Worker でも引ける形にする）。
+データセットの main が進んだとき（毎月の Sync）は、`.github/workflows/sync.yml` の `deploy` ジョブが Workers Builds の deploy hook（シークレット `WORKERS_DEPLOY_HOOK_URL`）を呼び、main をビルドし直してデプロイする。
