@@ -186,6 +186,16 @@ describe("/v1/forward/batch", () => {
     expect(((await res.json()) as { error: string }).error).toContain("queries[1]");
   });
 
+  it("address が長すぎれば 400", async () => {
+    const res = await batch({ queries: [{ name: "クエリア", address: "東".repeat(201) }] });
+    expect(res.status).toBe(400);
+  });
+
+  it("本文が大きすぎれば 413", async () => {
+    const res = await batch({ queries: [{ name: "クエリア" }], padding: "x".repeat(300 * 1024) });
+    expect(res.status).toBe(413);
+  });
+
   it("本文が JSON でなければ 400", async () => {
     const res = await app.request("/v1/forward/batch", { method: "POST", body: "x" }, env);
     expect(res.status).toBe(400);

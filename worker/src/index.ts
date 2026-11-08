@@ -1,5 +1,6 @@
 // 法人名寄せ API。正引きは企業名 (と住所) から法人番号の候補を、逆引きは法人番号から法人を返す。照合の規則は DESIGN.md
 import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 
 import { type ReadLog } from "./parquet";
@@ -25,6 +26,10 @@ const MAX_LIMIT = 20;
 const MAX_BATCH = 100;
 /** name の文字数の上限。D1 に渡す bigram の一覧と編集距離の計算は name の長さに比例するため、上限を置く */
 const MAX_NAME_LENGTH = 200;
+/** address の文字数の上限。住所から市区町村を探すのに、市区町村の数だけ address を走査するため */
+const MAX_ADDRESS_LENGTH = 200;
+/** /v1/forward/batch の本文の大きさの上限 (100 件 × name と address の上限に余裕を足したもの) */
+const MAX_BATCH_BODY_BYTES = 256 * 1024;
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -48,6 +53,9 @@ const inputOf = (name: unknown, address: unknown, limit: unknown): Input | strin
   }
   if (address !== undefined && address !== null && typeof address !== "string") {
     return "address は文字列にしてください";
+  }
+  if (typeof address === "string" && Array.from(address.trim()).length > MAX_ADDRESS_LENGTH) {
+    return `address は ${MAX_ADDRESS_LENGTH} 文字以内にしてください`;
   }
   return {
     name: name.trim(),
@@ -112,13 +120,20 @@ const forwardBatch = async (c: Context<{ Bindings: Env }>, queries: unknown) => 
 };
 
 // 本文の queries に問い合わせの配列を渡す
-app.post("/v1/forward/batch", async (c) => {
-  const body: unknown = await c.req.json().catch(() => null);
-  return forwardBatch(
-    c,
-    typeof body === "object" && body !== null && "queries" in body ? body.queries : undefined,
-  );
-});
+app.post(
+  "/v1/forward/batch",
+  bodyLimit({
+    maxSize: MAX_BATCH_BODY_BYTES,
+    onError: (c) => c.json({ error: "本文が大きすぎます" }, 413),
+  }),
+  async (c) => {
+    const body: unknown = await c.req.json().catch(() => null);
+    return forwardBatch(
+      c,
+      typeof body === "object" && body !== null && "queries" in body ? body.queries : undefined,
+    );
+  },
+);
 
 // URL だけで呼ぶ口 (DuckDB の read_json など)。name を繰り返して渡す。address は渡すなら name と同じ数だけ
 // 同じ順に繰り返す (無い社は空)。limit はすべての問い合わせに効く
