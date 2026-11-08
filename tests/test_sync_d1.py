@@ -65,6 +65,12 @@ def apply(db: sqlite3.Connection, statements) -> None:
             db.executescript(f.read_text(encoding="utf-8"))
 
 
+def load(db: sqlite3.Connection, con: duckdb.DuckDBPyConnection, version: str) -> None:
+    """全件を入れて今の表と入れ替える"""
+    apply(db, sync_d1.full(con, version))
+    apply(db, sync_d1.swap())
+
+
 def dump(db: sqlite3.Connection) -> dict:
     return {t: sorted(db.execute(f"SELECT * FROM {t}").fetchall()) for t in ["company", "gram", "posting", "city"]}
 
@@ -87,18 +93,18 @@ def small_batches(monkeypatch):
 
 def test_diff_matches_full(con):
     db = sqlite3.connect(":memory:")
-    apply(db, sync_d1.full(con, "old"))
+    load(db, con, "old")
     sync_d1.prepare_diff(con, "old", "new")
     apply(db, sync_d1.diff(con, "new"))
 
     expected = sqlite3.connect(":memory:")
-    apply(expected, sync_d1.full(con, "new"))
+    load(expected, con, "new")
     assert dump(db) == dump(expected)
 
 
 def test_diff_can_be_applied_twice(con):
     db = sqlite3.connect(":memory:")
-    apply(db, sync_d1.full(con, "old"))
+    load(db, con, "old")
     sync_d1.prepare_diff(con, "old", "new")
     apply(db, sync_d1.diff(con, "new"))
     once = dump(db)
@@ -127,3 +133,40 @@ def test_statements_fit_in_byte_limit(monkeypatch):
     for s in statements:
         db.execute(s)
     assert db.execute("SELECT count(*) FROM company").fetchone()[0] == 20
+
+
+def test_full_keeps_current_tables_until_swap(con):
+    db = sqlite3.connect(":memory:")
+    load(db, con, "old")
+    before = dump(db)
+    apply(db, sync_d1.full(con, "new"))
+    assert dump(db) == before
+    apply(db, sync_d1.swap())
+    expected = sqlite3.connect(":memory:")
+    load(expected, con, "new")
+    assert dump(db) == dump(expected)
+
+
+def test_full_can_be_repeated(con):
+    """入れ替えた後の索引と、次に作る索引の名前が重ならない"""
+    db = sqlite3.connect(":memory:")
+    load(db, con, "old")
+    load(db, con, "new")
+    load(db, con, "new")
+    indexes = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'company'")]
+    assert len([i for i in indexes if i.startswith("company_core")]) == 1
+
+
+@pytest.mark.parametrize(
+    ("meta", "full", "expected"),
+    [
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION}, False, "v1"),
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION, "applying": "v2"}, False, "v1"),  # 同じ差分を流し直す
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION, "applying": "v9"}, False, None),
+        ({"version": "v1", "schema": "old"}, False, None),
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION}, True, None),
+        ({}, False, None),
+    ],
+)
+def test_base_version(meta, full, expected):
+    assert sync_d1.base_version(meta, "v2", full)[0] == expected

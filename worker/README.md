@@ -32,11 +32,13 @@ GET /v1/reverse?corporate_number=1180301018771
 - `posting`: bigram・lg_code・法人番号（主キー）
 - `gram`: bigram ごとの出現する法人の数（df）と IDF
 - `city`: 市区町村の lg_code・都道府県名・市区町村名。Worker は 5 分ごとに読み直す
-- `meta`: 最後に反映したバージョンの ID（`version`）と、テーブルの定義のバージョン（`schema`）
+- `meta`: 最後に反映したバージョンの ID（`version`）、テーブルの定義のバージョン（`schema`）、反映の途中ならその反映先（`applying`）
 
 正引きは、`company` で商号の本体が同じ法人を引く文と、`gram`・`posting`・`company` で近い商号を引く文を、1 回の batch で流す。商号と法人格（住所があれば市区町村も）が一致する法人が 1 件だけなら前者で答え、それ以外は後者の候補を編集距離で並べる。
 
-反映は、`meta` のバージョンと新しいバージョンの `forward.company_core`・`forward.posting` を比べ、変わった行だけを主キーで消す・書く。`gram` と `city` は毎回全部を書き直す。書き終えたら法人数と `posting` の行数を元データと照合し、合っていれば最後に `meta` を書く。`meta` の `schema`（`sync_d1.py` の `SCHEMA` から作るテーブルの定義のバージョン）が違うとき、前のバージョンのカタログを読めないとき、`--full` のときは、テーブルを作り直して全件を入れる（そのあいだ正引きは失敗する）。
+反映は、`meta` のバージョンと新しいバージョンの `forward.company_core`・`forward.posting` を比べ、変わった行だけを主キーで消す・書く。`gram` と `city` は毎回全部を書き直す。書き終えたら法人数と `posting` の行数を元データと照合し、合っていれば最後に `meta` を書く。途中で失敗したら同じコマンドを流し直せばよい（書き始める前に `meta` の `applying` に反映先のバージョンを書き、流し直す前に main が別のバージョンに進んでいたら全件を入れ直す）。
+
+`meta` の `schema`（`sync_d1.py` の `SCHEMA` から作るテーブルの定義のバージョン）が違うとき、前のバージョンのカタログを読めないとき、`--full` のときは、全件を `company_next` などの別の表に入れ、照合が合ったら今の表と入れ替える。入れ替えるまで正引きは今の表を引く。入れ替えるあいだは、D1 の大きさが一時的に 2 倍になる。
 
 ```bash
 uv run python scripts/sync_d1.py          # リポジトリの直下で。wrangler login か CLOUDFLARE_API_TOKEN が要る
@@ -62,4 +64,4 @@ node bench/latency.mjs https://company-resolver.queria.io   # 手元から API �
 
 Cloudflare の Workers Builds が、`main` に入った変更を `npx wrangler deploy` で本番（`queria-company-resolver`）にデプロイする。PR をマージすると本番に出る。`main` 以外のブランチへの push は `npx wrangler versions upload` で、本番に出さないバージョンだけを作る。どちらもルートは `worker/`。
 
-正引きの索引（D1）は Worker のデプロイとは別に、`.github/workflows/sync.yml` の `d1` ジョブが反映する。D1 のテーブルを変える PR は、マージの前に `uv run python scripts/sync_d1.py` で D1 を新しい形にしておく。
+正引きの索引（D1）は Worker のデプロイとは別に、`.github/workflows/sync.yml` の `d1` ジョブが反映する。D1 のテーブルを変える PR は、マージの前に `uv run python scripts/sync_d1.py` で D1 を新しい形にしておく（Worker のデプロイより先に表が入れ替わるので、変更前の Worker でも引ける形にする）。
