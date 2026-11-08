@@ -11,11 +11,20 @@ clean-targets:
   - "dbt_packages"
 
 # 逆引きの Worker (worker/src/reverse.ts) は DuckLake のカタログを読まず、ここで書いた Parquet を直接読む。
-# 正引きの表は scripts/sync_d1.py が D1 に入れる。
+# 正引きの表は Worker のビルド (worker/scripts/build-data.mjs) が静的アセットに置く。
 # 表はまるごと作り直す (incremental にすると削除ファイルができ、Parquet だけを読む Worker が消した行を返す)。
 # 行グループの大きさはスキーマに付ける (dbt は __dbt_tmp に書いてから改名するので、テーブルに付けても効かない)。
 # 大きさは DuckDB が並列に書く単位 (122,880 行) を割り切るものにする。DuckDB はベクトル (2,048 行) より
 # 小さい行グループを書かないので、2,048 行が最小
+# 正引きの索引の分け方。worker/src/forward.ts の同じ名前の値と揃える
+vars:
+  # 出現する法人がこれを超える bigram を共通の bigram とする。全国で読む行の上限と同じ値
+  forward_national_rows: 10000
+  forward_name_shards: 8192
+  forward_gram_shards: 1024
+  forward_rare_shards: 8192
+  forward_city_buckets: 64
+
 models:
   company_resolver:
     +database: company_resolver
@@ -24,12 +33,29 @@ models:
     # (pre-hook の書き換えが確定する前に、Python のモデルが別の接続でカタログに書いて「database is locked」になる)
     names:
       +schema: forward
-    # 正引き (/v1/forward)。scripts/sync_d1.py が D1 に入れる
+    # 正引き (/v1/forward)。Worker のビルド (worker/scripts/build-data.mjs) が、exact_name・gram・posting_rare・
+    # posting_common・city のファイルを静的アセットに置く。静的アセットは丸ごとしか読めないので、1 件の検索で読む
+    # ファイルが小さくなるように分ける。分けた表はパーティションごとにファイルを 1 つにする (build-data.mjs が確かめる)
     forward:
       +schema: forward
       +pre-hook:
         - "CREATE SCHEMA IF NOT EXISTS company_resolver.forward"
         - "CALL company_resolver.set_option('parquet_compression', 'zstd', schema => 'forward')"
+      # 分けて書くテーブルは 1 スレッドで書き、入力の並び (パーティションの順) のまま 1 つのパーティションを
+      # 1 つのファイルにする。同時に開くファイルは既定の数のままでよい (並びの順に閉じていくので開き直さない)
+      exact_name: &by_partition
+        +partitioned_by: shard
+        +pre-hook:
+          - "SET threads = 1"
+          - "SET partitioned_write_flush_threshold = 100000000"
+        +post-hook:
+          - "RESET threads"
+          - "RESET partitioned_write_flush_threshold"
+      gram: *by_partition
+      posting_rare: *by_partition
+      posting_common:
+        <<: *by_partition
+        +partitioned_by: [common_id, bucket]
     # 逆引き (/v1/reverse)。法人番号の下 3 桁 (shard) ごとにファイルを分ける
     reverse:
       +schema: reverse

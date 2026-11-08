@@ -1,0 +1,31 @@
+schema: forward
+name: posting_rare
+title: bigram 索引（出現が少ないもの）
+description: |-
+  出現する法人が 10,000 以下の bigram ごとの法人の一覧です。商号を 2 文字ずつに分けた並び（bigram）で、近い商号の法人を検索するのに使います。
+
+  - shard ごとにファイルを分けています
+keywords:
+  - 法人番号
+sources:
+  - path: https://www.houjin-bangou.nta.go.jp/
+fields:
+  - name: shard
+    title: ファイルの番号
+    description: "bigram の文字のコードポイントの和を 8,192 で割った余り"
+  - name: g
+    title: bigram
+  - name: lg_code
+    title: 全国地方公共団体コード
+    description: "本店所在地の市区町村"
+  - name: corporate_number
+    title: 法人番号
+  - name: legal_form
+    title: 法人格
+    description: "株式会社・有限会社・合同会社・合資会社・合名会社。それ以外は NULL"
+  - name: core
+    title: 商号の本体
+    description: "法人格などを除いて正規化した商号"
+  - name: name
+    title: 商号
+    description: "NFKC で正規化した商号"

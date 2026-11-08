@@ -27,3 +27,13 @@ CASE WHEN length({{ s }}) <= 1 THEN [{{ s }}]
      ELSE list_distinct([substr({{ s }}, i, 2) FOR i IN range(1, length({{ s }}))]) END
 {%- endmacro %}
 
+
+-- 静的アセットのファイルの番号: 文字のコードポイントの和を n で割った余り (worker/src/normalize.ts の shardOf)
+{% macro codepoint_shard(s, n) -%}
+CAST(list_sum([unicode(substr({{ s }}, i, 1)) FOR i IN range(1, length({{ s }}) + 1)]) % {{ n }} AS INTEGER)
+{%- endmacro %}
+
+-- 市区町村の区分: lg_code を数として n で割った余り (worker/src/normalize.ts の cityBucket)。lg_code が無ければ 0
+{% macro city_bucket(lg_code, n) -%}
+CAST(coalesce(TRY_CAST({{ lg_code }} AS BIGINT), 0) % {{ n }} AS INTEGER)
+{%- endmacro %}
