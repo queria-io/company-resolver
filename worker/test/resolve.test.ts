@@ -55,6 +55,15 @@ describe("/v1/resolve", () => {
     expect(answer.candidates[0].evidence.legal_form).toBe("mismatch");
   });
 
+  it("商号が一致しても住所の市区町村が違えば、候補として返す", async () => {
+    const answer = await resolve({ name: "株式会社キャリアバンク", address: "大阪府大阪市北区" });
+    expect(answer.status).toBe("candidates");
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000006",
+      evidence: { name: "normalized", city: "mismatch" },
+    });
+  });
+
   it("誤字があれば候補として返し、何文字違いかを示す", async () => {
     const answer = await resolve({ name: "株式会社クエア", address: "東京都千代田区" });
     expect(answer.status).toBe("candidates");

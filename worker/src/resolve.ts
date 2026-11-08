@@ -162,7 +162,8 @@ export const resolve = async (
     .reduce<{ total: number; list: (Gram & { full: boolean })[] }>(
       ({ total, list }, r) => ({
         total: total + r.df,
-        list: [...list, { ...r, full: total + r.df <= NATIONAL_READ_ROWS }],
+        // 最も珍しい bigram は必ず全国で読む (住所が無くても、同じ商号の法人をすべて引けるように)
+        list: [...list, { ...r, full: list.length === 0 || total + r.df <= NATIONAL_READ_ROWS }],
       }),
       { total: 0, list: [] },
     ).list;
@@ -171,14 +172,18 @@ export const resolve = async (
   const cityCodes = new Set(inCity.map((c) => c.lg_code));
   const fileOf = new Map(files.flatMap(([k, f]) => (f ? [[k, f] as const] : [])));
 
-  // 2 回目: 全国で読む bigram は全部の行、残りは住所の市区町村の行だけを読む
+  // 2 回目: 全国で読む bigram は全部の行、残りは住所の市区町村の行だけを読む。
+  // 同じファイルの bigram は行グループをまとめ、同じ行グループを 2 回読まない
   const reads = chosen.filter((r) => r.full || cityCodes.size > 0);
+  const byFile = Map.groupBy(reads, (r) => shardOf(r.g, SHARDS));
   const rows = (
     await Promise.all(
-      reads.map(async (r) => {
-        const file = fileOf.get(shardOf(r.g, SHARDS));
+      [...byFile].map(async ([k, gs]) => {
+        const file = fileOf.get(k);
         if (!file) return [];
-        const groups = groupsFor(file, r.g, r.full ? undefined : cityCodes);
+        const groups = [
+          ...new Set(gs.flatMap((r) => groupsFor(file, r.g, r.full ? undefined : cityCodes))),
+        ].sort((a, b) => a - b);
         const got = await readGroups<Posting>(file, groups, [
           "g",
           "lg_code",
@@ -187,7 +192,11 @@ export const resolve = async (
           "core",
           "name",
         ]);
-        return got.filter((p) => p.g === r.g && (r.full || cityCodes.has(p.lg_code)));
+        const want = new Map(gs.map((r) => [r.g, r.full]));
+        return got.filter((p) => {
+          const full = want.get(p.g);
+          return full !== undefined && (full || cityCodes.has(p.lg_code));
+        });
       }),
     )
   ).flat();
@@ -229,20 +238,21 @@ export const resolve = async (
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
 
-  // 同じ商号の法人の数。商号が同じ法人はどの bigram も持つので、最も珍しい bigram の行で数える
+  // 同じ商号の法人の数。商号が同じ法人はどの bigram も持つので、全国で読んだ最も珍しい bigram の行で数える
   const rarest = chosen[0];
   const sameName = (p: Posting) => p.g === rarest?.g && p.core === core && legalOk(p);
   const sameCount =
-    cityCodes.size > 0
-      ? rows.filter((p) => sameName(p) && cityCodes.has(p.lg_code)).length
-      : rarest?.full
-        ? rows.filter(sameName).length
-        : null;
+    rarest === undefined
+      ? null
+      : rows.filter((p) => sameName(p) && (cityCodes.size === 0 || cityCodes.has(p.lg_code)))
+          .length;
 
   const top = ranked[0];
-  const exact = top !== undefined && top.ed === 0 && top.legal;
+  // 住所の市区町村が分かるときは、市区町村まで一致して初めて商号の一致とみなす
+  const exact =
+    top !== undefined && top.ed === 0 && top.legal && (cityCodes.size === 0 || top.cityOk);
   const status: Status = exact
-    ? (cityCodes.size > 0 ? top.cityOk : true) && sameCount === 1
+    ? sameCount === 1
       ? "matched"
       : "ambiguous"
     : ranked.length > 0
