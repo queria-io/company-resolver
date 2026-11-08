@@ -1,4 +1,4 @@
-// 索引を手元のファイルから読んで、Worker と同じ resolve を EDINET の問い合わせで流す。
+// 索引を手元のファイルから読んで、Worker と同じ forward を EDINET の問い合わせで流す。
 // 正解率と、1 件あたりの R2 の読み込み回数・量・処理時間を出す。
 //
 // usage: pnpm tsx bench/run.ts <index_dir> <queries.jsonl>
@@ -7,7 +7,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } fro
 import { join } from "node:path";
 
 import type { ReadLog } from "../src/parquet";
-import { resolve } from "../src/resolve";
+import { forward } from "../src/forward";
 
 type Query = { truth: string; name: string; address: string | null };
 
@@ -43,7 +43,7 @@ const main = async (indexDir: string, queriesPath: string) => {
     .trim()
     .split("\n")
     .map((l) => JSON.parse(l));
-  // fileBucket は R2Bucket のうち resolve が使う get だけを持つ
+  // fileBucket は R2Bucket のうち forward が使う get だけを持つ
   const bucket = fileBucket(indexDir) as unknown as R2Bucket;
   const stats = { matched: 0, matchedCorrect: 0, top1: 0, top5: 0 };
   const reads: number[] = [];
@@ -52,7 +52,7 @@ const main = async (indexDir: string, queriesPath: string) => {
   for (const q of queries) {
     const log: ReadLog = { reads: 0, bytes: 0 };
     const t0 = performance.now();
-    const answer = await resolve(
+    const answer = await forward(
       bucket,
       "",
       { name: q.name, address: q.address ?? undefined },

@@ -127,7 +127,7 @@ const groupsFor = (file: ParquetFile, g: string, cityCodes?: ReadonlySet<string>
   );
 };
 
-export const resolve = async (
+export const forward = async (
   bucket: R2Bucket,
   prefix: string,
   input: Input,

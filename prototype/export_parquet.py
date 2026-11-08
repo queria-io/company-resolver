@@ -5,6 +5,8 @@ usage: python export_parquet.py <index_dir> <out_dir>
 - posting/shard=NNNN.parquet: bigram ごとの法人（g, lg_code の順）。行グループは 1,024 行
 - gram/shard=NNNN.parquet: bigram ごとの出現する法人の数（df）と IDF。Worker はファイルを丸ごと読む
 - city.parquet: 市区町村の lg_code・都道府県名・市区町村名
+- company/shard=NN.parquet: 法人番号から法人を引く (逆引き)。NN は法人番号の下 2 桁。法人番号の順に並べ、
+  行グループは 2,048 行
 
 shard は bigram の文字のコードポイントの和を SHARDS で割った余り。1 件の検索で開くファイルを
 bigram の数までに抑え、各ファイルのフッターを小さく保つために分ける
@@ -18,6 +20,9 @@ from build_index import connect
 
 SHARDS = 1024
 ROW_GROUP_ROWS = 1024
+COMPANY_SHARDS = 100
+# 1 ファイル約 5 万行。2,048 行ずつにするとフッターが Worker の 1 回目の読み (32 KB) に収まる
+COMPANY_ROW_GROUP_ROWS = 2048
 
 
 def export(index_dir: str, out: str) -> None:
@@ -26,7 +31,7 @@ def export(index_dir: str, out: str) -> None:
         CREATE OR REPLACE MACRO shard(g) AS
           list_sum([unicode(substr(g, i, 1)) FOR i IN range(1, length(g) + 1)]) % {SHARDS}
     """)
-    for sub in ("posting", "gram"):
+    for sub in ("posting", "gram", "company"):
         (Path(out) / sub).mkdir(parents=True, exist_ok=True)
     con.execute("""
         CREATE OR REPLACE TEMP TABLE posting AS
@@ -52,6 +57,16 @@ def export(index_dir: str, out: str) -> None:
           SELECT DISTINCT lg_code, prefecture_name, city_name FROM company WHERE city_name <> '' ORDER BY lg_code
         ) TO '{out}/city.parquet' (FORMAT parquet, COMPRESSION zstd)
     """)
+    # 法人番号の下 2 桁は散らばるので、ファイルの大きさがほぼ揃う
+    for k in range(COMPANY_SHARDS):
+        rows = con.execute(f"""
+            SELECT corporate_number, name, furigana, kind, prefecture_name, city_name, street_number, lg_code,
+                   assignment_date
+            FROM company WHERE right(corporate_number, 2) = '{k:02d}' ORDER BY corporate_number
+        """).to_arrow_table()
+        if rows.num_rows:
+            pq.write_table(rows, f"{out}/company/shard={k:02d}.parquet", row_group_size=COMPANY_ROW_GROUP_ROWS,
+                           compression="zstd", write_statistics=["corporate_number"])
 
 
 if __name__ == "__main__":

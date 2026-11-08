@@ -5,6 +5,7 @@ usage (prototype/ の仮想環境で): python test/make-fixture.py
 """
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 
 import pyarrow as pa
@@ -34,6 +35,7 @@ def main() -> None:
         "corporate_number": cols[0], "name": cols[1], "furigana": [None] * len(COMPANIES),
         "kind": ["301"] * len(COMPANIES), "prefecture_name": cols[2], "city_name": cols[3],
         "street_number": ["1-1"] * len(COMPANIES), "lg_code": cols[4],
+        "assignment_date": pa.array([date(2015, 10, 5)] * len(COMPANIES)),
     })
     with tempfile.TemporaryDirectory() as tmp:
         pq.write_table(table, f"{tmp}/houjin.parquet")

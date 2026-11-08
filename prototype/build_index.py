@@ -30,7 +30,7 @@ def build(src: str, out: str) -> None:
     con.register("houjin_raw", houjin)
     con.execute("""
         CREATE OR REPLACE TABLE company AS
-        SELECT corporate_number, name, furigana, kind, prefecture_name, city_name, street_number, lg_code,
+        SELECT corporate_number, name, furigana, kind, prefecture_name, city_name, street_number, lg_code, assignment_date,
                legal_form(name) AS legal_form, core_name(name) AS core
         FROM houjin_raw
     """)
