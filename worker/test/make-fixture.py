@@ -86,7 +86,7 @@ def main() -> None:
         con.execute(f"ATTACH 'ducklake:sqlite:{tmp}/work.sqlite' AS c (READ_ONLY)")
         write_manifest(con)
         sql = write_files(full(con, "c"), tmp / "sql")
-        (FIXTURE / "forward.sql").write_text("".join(f.read_text() for f in sql))
+        (FIXTURE / "forward.sql").write_text("".join(f.read_text(encoding="utf-8") for f in sql), encoding="utf-8")
         shutil.rmtree(FIXTURE / "forward")
 
 

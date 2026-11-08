@@ -62,7 +62,7 @@ def make(con: duckdb.DuckDBPyConnection, alias: str, companies: dict, with_compa
 def apply(db: sqlite3.Connection, statements) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         for f in sync_d1.write_files(statements, Path(tmp)):
-            db.executescript(f.read_text())
+            db.executescript(f.read_text(encoding="utf-8"))
 
 
 def dump(db: sqlite3.Connection) -> dict:
@@ -111,3 +111,19 @@ def test_diff_writes_only_changed_companies(con):
     sql = "\n".join(sync_d1.diff(con, "new"))
     assert "1000000000001" not in sql
     assert "1000000000004" in sql  # 閉鎖した法人を消す
+
+
+def test_statements_fit_in_byte_limit(monkeypatch):
+    """長い商号が続いても、1 文が BYTES_PER_STATEMENT を超えない"""
+    monkeypatch.setattr(sync_d1, "ROWS_PER_STATEMENT", 500)
+    monkeypatch.setattr(sync_d1, "BYTES_PER_STATEMENT", 1_000)
+    rows = [(f"{i:013}", "長" * 50, "株式会社", "131016", "株式会社" + "長" * 50) for i in range(20)]
+    statements = list(sync_d1.insert("company", rows))
+    assert len(statements) > 1
+    head = len("INSERT INTO company VALUES ".encode())
+    assert all(len(s.encode()) - head <= 1_000 for s in statements)
+    db = sqlite3.connect(":memory:")
+    db.execute(sync_d1.SCHEMA[0])
+    for s in statements:
+        db.execute(s)
+    assert db.execute("SELECT count(*) FROM company").fetchone()[0] == 20

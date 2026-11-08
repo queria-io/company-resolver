@@ -59,6 +59,8 @@ KEYS = {"company": ["corporate_number"], "gram": ["g"], "posting": ["g", "lg_cod
         "city": ["lg_code"]}
 
 ROWS_PER_STATEMENT = 500
+# 1 文の大きさの上限。D1 の 1 文の上限 (100 KB) に、文の頭と終わりの分の余裕を残す
+BYTES_PER_STATEMENT = 90_000
 # D1 の import に渡す 1 ファイルの大きさの上限
 BYTES_PER_FILE = 900 * 2**20
 # 差分を書くときに 1 つにまとめる法人の数
@@ -75,13 +77,23 @@ def literal(v: object) -> str:
     return "'" + str(v).replace("'", "''") + "'"
 
 
-def values(rows: Iterable[tuple]) -> str:
-    return ",".join("(" + ",".join(map(literal, r)) + ")" for r in rows)
+def row(r: tuple) -> str:
+    return "(" + ",".join(map(literal, r)) + ")"
 
 
-def batches(rows: list[tuple]) -> Iterator[list[tuple]]:
-    for i in range(0, len(rows), ROWS_PER_STATEMENT):
-        yield rows[i : i + ROWS_PER_STATEMENT]
+def joined(head: str, parts: Iterable[str], tail: str = "") -> Iterator[str]:
+    """parts を「,」でつなぎ、ROWS_PER_STATEMENT 個か BYTES_PER_STATEMENT バイトまでずつの文にする"""
+    buf: list[str] = []
+    size = 0
+    for p in parts:
+        n = len(p.encode()) + 1
+        if buf and (len(buf) >= ROWS_PER_STATEMENT or size + n > BYTES_PER_STATEMENT):
+            yield head + ",".join(buf) + tail
+            buf, size = [], 0
+        buf.append(p)
+        size += n
+    if buf:
+        yield head + ",".join(buf) + tail
 
 
 def rows_of(con: duckdb.DuckDBPyConnection, table: str, s: str) -> str:
@@ -114,19 +126,17 @@ def by_chunk(rows: Iterator[tuple]) -> Iterator[tuple[int, list[tuple]]]:
         yield current, buf
 
 
-def insert(table: str, rows: list[tuple], verb: str = "INSERT") -> Iterator[str]:
-    for b in batches(rows):
-        yield f"{verb} INTO {table} VALUES {values(b)}"
+def insert(table: str, rows: Iterable[tuple], verb: str = "INSERT") -> Iterator[str]:
+    yield from joined(f"{verb} INTO {table} VALUES ", map(row, rows))
 
 
-def delete(table: str, rows: list[tuple]) -> Iterator[str]:
+def delete(table: str, rows: Iterable[tuple]) -> Iterator[str]:
     """主キーの値で消す。1 列なら IN (…)、複数列なら行値の IN (VALUES …)"""
     keys = KEYS[table]
-    for b in batches(rows):
-        if len(keys) == 1:
-            yield f"DELETE FROM {table} WHERE {keys[0]} IN ({','.join(literal(r[0]) for r in b)})"
-        else:
-            yield f"DELETE FROM {table} WHERE ({', '.join(keys)}) IN (VALUES {values(b)})"
+    if len(keys) == 1:
+        yield from joined(f"DELETE FROM {table} WHERE {keys[0]} IN (", (literal(r[0]) for r in rows), ")")
+    else:
+        yield from joined(f"DELETE FROM {table} WHERE ({', '.join(keys)}) IN (VALUES ", map(row, rows), ")")
 
 
 def write_files(statements: Iterable[str], out: Path) -> list[Path]:
@@ -139,7 +149,7 @@ def write_files(statements: Iterable[str], out: Path) -> list[Path]:
             if f:
                 f.close()
             files.append(out / f"{len(files):03}.sql")
-            f = files[-1].open("w")
+            f = files[-1].open("w", encoding="utf-8")
         f.write(s + ";\n")
     if f:
         f.close()
@@ -151,9 +161,7 @@ def full(con: duckdb.DuckDBPyConnection, new: str) -> Iterator[str]:
     yield from (f"DROP TABLE IF EXISTS {t}" for t in TABLES)
     yield from SCHEMA
     for table in ROWS:
-        cur = con.cursor().execute(rows_of(con, table, new) + f" ORDER BY {', '.join(KEYS[table])}")
-        while rows := cur.fetchmany(ROWS_PER_STATEMENT):
-            yield f"INSERT INTO {table} VALUES {values(rows)}"
+        yield from insert(table, stream(con, rows_of(con, table, new) + f" ORDER BY {', '.join(KEYS[table])}"))
     yield from INDEXES
 
 
@@ -208,12 +216,8 @@ def diff(con: duckdb.DuckDBPyConnection, new: str) -> Iterator[str]:
         yield from insert("posting", take("add_posting", c), "INSERT OR IGNORE")
     # df と IDF は法人の数で変わるので、gram は全部を書き直す。city も小さいので全部
     for table in ["gram", "city"]:
-        gone = stream(con, f"SELECT * FROM memory.diff.del_{table}")
-        while b := [r for _, r in zip(range(ROWS_PER_STATEMENT), gone)]:
-            yield from delete(table, b)
-        rows = stream(con, rows_of(con, table, new) + f" ORDER BY {KEYS[table][0]}")
-        while b := [r for _, r in zip(range(ROWS_PER_STATEMENT), rows)]:
-            yield from insert(table, b, "INSERT OR REPLACE")
+        yield from delete(table, stream(con, f"SELECT * FROM memory.diff.del_{table}"))
+        yield from insert(table, stream(con, rows_of(con, table, new) + f" ORDER BY {KEYS[table][0]}"), "INSERT OR REPLACE")
 
 
 class D1:
@@ -247,7 +251,7 @@ class SQLite:
         return rows
 
     def run_file(self, path: Path) -> None:
-        self.db.executescript(path.read_text())
+        self.db.executescript(path.read_text(encoding="utf-8"))
         self.db.commit()
 
 
