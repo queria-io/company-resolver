@@ -175,8 +175,8 @@ describe("/v1/forward/batch", () => {
     expect(res.status).toBe(400);
   });
 
-  it("問い合わせが 100 件を超えれば 400", async () => {
-    const res = await batch({ queries: Array.from({ length: 101 }, () => ({ name: "クエリア" })) });
+  it("問い合わせが 20 件を超えれば 400", async () => {
+    const res = await batch({ queries: Array.from({ length: 21 }, () => ({ name: "クエリア" })) });
     expect(res.status).toBe(400);
   });
 
@@ -192,7 +192,7 @@ describe("/v1/forward/batch", () => {
   });
 
   it("本文が大きすぎれば 413", async () => {
-    const res = await batch({ queries: [{ name: "クエリア" }], padding: "x".repeat(300 * 1024) });
+    const res = await batch({ queries: [{ name: "クエリア" }], padding: "x".repeat(100 * 1024) });
     expect(res.status).toBe(413);
   });
 

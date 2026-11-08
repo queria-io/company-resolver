@@ -22,16 +22,30 @@ export type Env = {
 };
 
 const MAX_LIMIT = 20;
-/** まとめて照合する問い合わせの数の上限。D1 は 1 件ずつ順に処理するので、1 回の呼び出しで占める時間を抑える */
-const MAX_BATCH = 100;
+/**
+ * まとめて照合する問い合わせの数の上限。D1 は 1 件ずつ順に処理し、10 秒のあいだに使った資源が多すぎると
+ * しばらく問い合わせを断る (近い商号の検索を 1 秒に約 17 件、10 秒続けると断られた)。
+ * 近い商号の検索が 20 件続いても約 1 秒で終わる数にする
+ */
+const MAX_BATCH = 20;
 /** name の文字数の上限。D1 に渡す bigram の一覧と編集距離の計算は name の長さに比例するため、上限を置く */
 const MAX_NAME_LENGTH = 200;
 /** address の文字数の上限。住所から市区町村を探すのに、市区町村の数だけ address を走査するため */
 const MAX_ADDRESS_LENGTH = 200;
-/** /v1/forward/batch の本文の大きさの上限 (100 件 × name と address の上限に余裕を足したもの) */
-const MAX_BATCH_BODY_BYTES = 256 * 1024;
+/** /v1/forward/batch の本文の大きさの上限 (MAX_BATCH 件 × name と address の上限に余裕を足したもの) */
+const MAX_BATCH_BODY_BYTES = 64 * 1024;
 
 const app = new Hono<{ Bindings: Env }>();
+
+// D1 が混み合って断ったときは、少し待てば通るので 503 と Retry-After で返す
+app.onError((err, c) => {
+  if (/overloaded/i.test(err.message)) {
+    c.header("Retry-After", "10");
+    return c.json({ error: "混み合っています。10 秒ほど待ってから呼んでください" }, 503);
+  }
+  console.error(err);
+  return c.json({ error: "サーバーで問題が起きました" }, 500);
+});
 
 // ブラウザの DuckDB (Queria の resolve_company) からも呼ぶ
 app.use("*", cors({ origin: "*", allowMethods: ["GET", "POST"] }));
