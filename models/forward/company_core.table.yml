@@ -1,0 +1,27 @@
+schema: forward
+name: company_core
+title: 法人の商号の本体
+description: |-
+  現存する法人ごとの、正規化した商号の本体・法人格・本店所在地の市区町村・商号です。法人格と空白・中黒・ハイフン類を除き、英字を大文字に、小書きの仮名を大きい仮名に正規化した商号の本体で、同じ商号の法人を引くのに使います。
+
+  - 商号の本体が空になる法人は含みません
+keywords:
+  - 法人番号
+sources:
+  - path: https://www.houjin-bangou.nta.go.jp/
+fields:
+  - name: corporate_number
+    title: 法人番号
+    description: "13 桁"
+  - name: core
+    title: 商号の本体
+    description: "法人格などを除いて正規化した商号"
+  - name: legal_form
+    title: 法人格
+    description: "株式会社・有限会社・合同会社・合資会社・合名会社。それ以外は NULL"
+  - name: lg_code
+    title: 全国地方公共団体コード
+    description: "本店所在地の市区町村"
+  - name: name
+    title: 商号
+    description: "NFKC で正規化した商号"

@@ -27,8 +27,3 @@ CASE WHEN length({{ s }}) <= 1 THEN [{{ s }}]
      ELSE list_distinct([substr({{ s }}, i, 2) FOR i IN range(1, length({{ s }}))]) END
 {%- endmacro %}
 
--- bigram のファイルの番号: 文字のコードポイントの和を 1,024 で割った余り
-{% macro gram_shard(g) -%}
-CAST(list_sum([unicode(substr({{ g }}, i, 1)) FOR i IN range(1, length({{ g }}) + 1)]) % 1024 AS INTEGER)
-{%- endmacro %}
-

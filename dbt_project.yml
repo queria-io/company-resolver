@@ -24,24 +24,12 @@ models:
     # (pre-hook の書き換えが確定する前に、Python のモデルが別の接続でカタログに書いて「database is locked」になる)
     names:
       +schema: forward
-    # 正引き (/v1/forward)。posting と gram は bigram の番号 (shard) ごとにファイルを分ける
+    # 正引き (/v1/forward)。scripts/sync_d1.py が D1 に入れる
     forward:
       +schema: forward
       +pre-hook:
         - "CREATE SCHEMA IF NOT EXISTS company_resolver.forward"
-        - "CALL company_resolver.set_option('parquet_row_group_size', 2048, schema => 'forward')"
         - "CALL company_resolver.set_option('parquet_compression', 'zstd', schema => 'forward')"
-      # 分けて書くテーブルは 1 スレッドで書き、書き出しの区切りを行グループの倍数にして、入力の並びを保つ
-      # (並列に書くと並びが崩れ、1 つの bigram の行が多くの行グループに散る)
-      posting: &by_shard
-        +partitioned_by: shard
-        +pre-hook:
-          - "SET threads = 1"
-          - "SET partitioned_write_flush_threshold = 491520"
-        +post-hook: &reset_write
-          - "RESET threads"
-          - "RESET partitioned_write_flush_threshold"
-      gram: *by_shard
     # 逆引き (/v1/reverse)。法人番号の下 3 桁 (shard) ごとにファイルを分ける
     reverse:
       +schema: reverse
@@ -49,4 +37,13 @@ models:
         - "CREATE SCHEMA IF NOT EXISTS company_resolver.reverse"
         - "CALL company_resolver.set_option('parquet_row_group_size', 2048, schema => 'reverse')"
         - "CALL company_resolver.set_option('parquet_compression', 'zstd', schema => 'reverse')"
-      company: *by_shard
+      # 分けて書くテーブルは 1 スレッドで書き、書き出しの区切りを行グループの倍数にして、入力の並びを保つ
+      # (並列に書くと並びが崩れ、1 つの法人番号の範囲が多くの行グループに散る)
+      company:
+        +partitioned_by: shard
+        +pre-hook:
+          - "SET threads = 1"
+          - "SET partitioned_write_flush_threshold = 491520"
+        +post-hook:
+          - "RESET threads"
+          - "RESET partitioned_write_flush_threshold"
