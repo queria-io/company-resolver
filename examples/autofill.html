@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>法人情報の自動入力（Queria Company Resolver の見本）</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 2rem auto; padding: 0 1rem; }
+  label { display: block; margin-top: 1rem; font-size: .9rem; }
+  input { width: 100%; padding: .5rem; box-sizing: border-box; font-size: 1rem; }
+  .field { position: relative; }
+  ul { position: absolute; z-index: 1; left: 0; right: 0; margin: 0; padding: 0; list-style: none;
+       background: #fff; border: 1px solid #ccc; max-height: 16rem; overflow: auto; }
+  li { padding: .5rem; cursor: pointer; }
+  li:hover, li[aria-selected="true"] { background: #eef; }
+  small { color: #666; }
+</style>
+</head>
+<body>
+<h1>法人情報の自動入力</h1>
+<p>会社名を入力して候補を選ぶか、法人番号を入力すると、残りの欄を埋めます。</p>
+
+<label for="name">会社名</label>
+<div class="field">
+  <input id="name" autocomplete="off" role="combobox" aria-controls="candidates" aria-expanded="false">
+  <ul id="candidates" role="listbox" hidden></ul>
+</div>
+<label for="corporate_number">法人番号</label>
+<input id="corporate_number" inputmode="numeric" maxlength="13">
+<label for="furigana">フリガナ</label>
+<input id="furigana">
+<label for="prefecture">都道府県</label>
+<input id="prefecture">
+<label for="city">市区町村</label>
+<input id="city">
+<label for="street_number">丁目番地等</label>
+<input id="street_number">
+
+<script>
+// 正引き (/v1/forward) で候補を出し、選んだ法人を逆引き (/v1/reverse) で引いてフォームを埋める。
+// 登録は要らない。API の説明は https://github.com/queria-io/company-resolver
+const API = new URLSearchParams(location.search).get("api") ?? "https://company-resolver.queria.io";
+const WAIT_MS = 300; // 入力が止まってから候補を引くまでの時間
+const $ = (id) => document.getElementById(id);
+const list = $("candidates");
+
+const getJson = (path, params) =>
+  fetch(`${API}${path}?${new URLSearchParams(params)}`).then((r) => (r.ok ? r.json() : null));
+
+const debounce = (f, ms) => {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => f(...args), ms);
+  };
+};
+
+const fill = (company) =>
+  ["corporate_number", "furigana", "prefecture", "city", "street_number"].forEach((k) => {
+    $(k).value = company?.[k] ?? "";
+  });
+
+const choose = async (corporateNumber) => {
+  const company = await getJson("/v1/reverse", { corporate_number: corporateNumber });
+  if (!company) return;
+  $("name").value = company.name;
+  fill(company);
+  showCandidates([]);
+};
+
+const showCandidates = (candidates) => {
+  list.replaceChildren(
+    ...candidates.map((c) => {
+      const li = document.createElement("li");
+      li.role = "option";
+      li.textContent = `${c.name}（${c.prefecture ?? ""}${c.city ?? ""}）`;
+      li.addEventListener("click", () => choose(c.corporate_number));
+      return li;
+    }),
+  );
+  list.hidden = candidates.length === 0;
+  $("name").setAttribute("aria-expanded", String(candidates.length > 0));
+};
+
+const suggest = debounce(async (name) => {
+  const answer = name.trim() ? await getJson("/v1/forward", { name, limit: 8 }) : null;
+  // 結果が返る前に入力が変わっていたら捨てる
+  if (name === $("name").value) showCandidates(answer?.candidates ?? []);
+}, WAIT_MS);
+
+$("name").addEventListener("input", (e) => suggest(e.target.value));
+$("corporate_number").addEventListener("input", (e) => {
+  if (/^\d{13}$/.test(e.target.value)) choose(e.target.value);
+});
+</script>
+</body>
+</html>
