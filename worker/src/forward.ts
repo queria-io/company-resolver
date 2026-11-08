@@ -78,10 +78,11 @@ export const loadCities = (sql: Sql, now = Date.now()): Promise<City[]> => {
   const cities = sql([{ sql: CITIES, params: [] }]).then(([rows]) => rows as City[]);
   const entry = { at: now, cities };
   cachedCities = entry;
-  // 失敗したら覚えない (次の問い合わせで読み直す)
-  cities.catch(() => {
+  // 失敗したときと、空だったとき (全件の入れ直しで city を入れる前) は覚えない (次の問い合わせで読み直す)
+  const forget = () => {
     if (cachedCities === entry) cachedCities = null;
-  });
+  };
+  cities.then((rows) => rows.length === 0 && forget(), forget);
   return cities;
 };
 
@@ -131,15 +132,14 @@ const topByScore = (rows: readonly Scored[], core: string): { r: Scored; ed: num
 
 /** 照合の結果を応答の形にする */
 const answerOf = (
-  input: Input,
+  input: Input & { lf: string | null },
   cities: readonly City[],
   cityCodes: ReadonlySet<string>,
   status: Status,
   sameCount: number | null,
   ranked: readonly Ranked[],
 ): Answer => {
-  const name = nfkc(input.name);
-  const lf = legalForm(name);
+  const { name, lf } = input;
   const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
   return {
     status,
@@ -189,7 +189,7 @@ export const forward = async (sql: Sql, cities: readonly City[], input: Input): 
           Number(legalOk(b.p)) - Number(legalOk(a.p)) ||
           a.p.corporate_number.localeCompare(b.p.corporate_number),
       );
-    return answerOf(input, cities, cityCodes, "matched", 1, ranked);
+    return answerOf({ ...input, name, lf }, cities, cityCodes, "matched", 1, ranked);
   }
 
   const picked = [
@@ -223,5 +223,5 @@ export const forward = async (sql: Sql, cities: readonly City[], input: Input): 
     top !== undefined && top.ed === 0 && top.legal && (cityCodes.size === 0 || top.cityOk);
   const status: Status = isExact ? "ambiguous" : ranked.length > 0 ? "candidates" : "not_found";
   const sameCount = fuzzy.length > 0 || exact.length > 0 ? same.length : null;
-  return answerOf(input, cities, cityCodes, status, sameCount, ranked);
+  return answerOf({ ...input, name, lf }, cities, cityCodes, status, sameCount, ranked);
 };
