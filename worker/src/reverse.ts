@@ -1,7 +1,6 @@
 // 法人番号から法人を返す。索引は models/reverse/company.sql の dbt のモデル
 import { columnStats, openFile, readGroups, type ReadLog } from "./parquet";
 import { type Index, shardFiles } from "./source";
-import type { Store } from "./store";
 
 type Day = Date | string | null;
 
@@ -106,7 +105,7 @@ const toCompany = ({
 });
 
 export const reverse = async (
-  bucket: Store,
+  bucket: R2Bucket,
   index: Index,
   corporateNumber: string,
   log: ReadLog = { reads: 0, bytes: 0 },

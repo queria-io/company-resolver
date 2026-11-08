@@ -90,7 +90,7 @@ const EXACT =
 
 // 出現する法人が少ない bigram RAREST_GRAMS 個を引き、最も珍しいものと、合計 NATIONAL_ROWS 行に収まるものは
 // 全国、すべての bigram は住所の市区町村の中で、IDF の合計の上位を取る。合計が同じなら商号の長さの差の
-// 小さい順に FETCH_TOP 件を返し、編集距離で COMPARE_TOP 件に絞るのは Worker
+// 小さい順 (それも同じなら法人番号の順) に FETCH_TOP 件を返し、編集距離で COMPARE_TOP 件に絞るのは Worker
 const FUZZY = `
 WITH chosen AS (
   SELECT g, idf, row_number() OVER w AS rn, sum(df) OVER w AS cum
@@ -107,18 +107,18 @@ local AS (
 )
 SELECT * FROM (
   SELECT 'national' AS part, s.score, co.* FROM national s JOIN company co USING (corporate_number)
-  ORDER BY s.score DESC, abs(length(co.core) - length(?3)) LIMIT ${FETCH_TOP})
+  ORDER BY s.score DESC, abs(length(co.core) - length(?3)), co.corporate_number LIMIT ${FETCH_TOP})
 UNION ALL
 SELECT * FROM (
   SELECT 'local' AS part, s.score, co.* FROM local s JOIN company co USING (corporate_number)
-  ORDER BY s.score DESC, abs(length(co.core) - length(?3)) LIMIT ${FETCH_TOP})`;
+  ORDER BY s.score DESC, abs(length(co.core) - length(?3)), co.corporate_number LIMIT ${FETCH_TOP})`;
 
 type Scored = Row & { part: "national" | "local"; score: number };
 
 export type Ranked = { p: Row; ed: number; cityOk: boolean };
 
-/** IDF の合計の上位 COMPARE_TOP 件。合計が同じなら商号の編集距離の小さい順 */
-const topByScore = (rows: readonly Scored[], core: string): Scored[] =>
+/** IDF の合計の上位 COMPARE_TOP 件と、その商号の編集距離。合計が同じなら編集距離の小さい順 */
+const topByScore = (rows: readonly Scored[], core: string): { r: Scored; ed: number }[] =>
   rows
     .map((r) => ({ r, ed: levenshtein(core, r.core) }))
     .sort(
@@ -127,8 +127,7 @@ const topByScore = (rows: readonly Scored[], core: string): Scored[] =>
         a.ed - b.ed ||
         a.r.corporate_number.localeCompare(b.r.corporate_number),
     )
-    .slice(0, COMPARE_TOP)
-    .map(({ r }) => r);
+    .slice(0, COMPARE_TOP);
 
 /** 照合の結果を応答の形にする */
 const answerOf = (
@@ -203,18 +202,13 @@ export const forward = async (sql: Sql, cities: readonly City[], input: Input): 
       core,
     ),
   ];
-  const best = new Map<string, Scored>();
-  for (const r of picked) {
-    if ((best.get(r.corporate_number)?.score ?? -1) < r.score) best.set(r.corporate_number, r);
+  const best = new Map<string, { r: Scored; ed: number }>();
+  for (const x of picked) {
+    if ((best.get(x.r.corporate_number)?.r.score ?? -1) < x.r.score)
+      best.set(x.r.corporate_number, x);
   }
   const ranked = [...best.values()]
-    .map((p) => ({
-      p,
-      score: p.score,
-      ed: levenshtein(core, p.core),
-      cityOk: cityOk(p),
-      legal: legalOk(p),
-    }))
+    .map(({ r, ed }) => ({ p: r, score: r.score, ed, cityOk: cityOk(r), legal: legalOk(r) }))
     .sort(
       (a, b) =>
         a.ed + (a.cityOk ? 0 : 2) - (b.ed + (b.cityOk ? 0 : 2)) ||
