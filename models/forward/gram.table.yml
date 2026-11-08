@@ -8,6 +8,9 @@ keywords:
 sources:
   - path: https://www.houjin-bangou.nta.go.jp/
 fields:
+  - name: shard
+    title: ファイルの番号
+    description: "bigram の文字のコードポイントの和を 1,024 で割った余り"
   - name: g
     title: bigram
   - name: df
@@ -16,3 +19,6 @@ fields:
   - name: idf
     title: IDF
     description: "ln(法人の総数 / df)"
+  - name: common_id
+    title: bigram の番号
+    description: "出現する法人が 10,000 を超える bigram に付けた番号。posting_common のファイルを分ける。それ以外は NULL"

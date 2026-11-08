@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: exact_name
+    description: |
+      正規化した商号の本体ごとの法人の一覧です。法人格と空白・中黒・ハイフン類を除き、英字を大文字に、小書きの仮名を大きい仮名に正規化した商号の本体で、同じ商号の法人を引くのに使います。
+      「国税庁法人番号公表サイト」（国税庁）（https://www.houjin-bangou.nta.go.jp/）を加工して作成。
+    access: public
+    columns:
+      - name: shard
+        data_type: integer
+      - name: core
+        data_type: varchar
+      - name: lg_code
+        data_type: varchar
+      - name: corporate_number
+        data_type: varchar
+      - name: legal_form
+        data_type: varchar
+      - name: name
+        data_type: varchar

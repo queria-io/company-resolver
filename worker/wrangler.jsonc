@@ -7,14 +7,8 @@
   // company-resolver.queria.io で出す。workers.dev は計測用に残す
   "workers_dev": true,
   "routes": [{ "pattern": "company-resolver.queria.io", "custom_domain": true }],
-  // 正引きの索引。scripts/sync_d1.py が models/forward/ の表を入れる
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "company-resolver-d1-test",
-      "database_id": "01959e19-3242-4374-8f44-a273e4b18c14",
-    },
-  ],
+  // 正引きの索引 (pnpm build:data で public/data/ に置く)。Worker が ASSETS から読む。外からは返さない
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // 逆引きの索引 (Parquet) の置き場
   "r2_buckets": [{ "binding": "DATA", "bucket_name": "queria" }],
   "vars": {
@@ -25,7 +19,7 @@
   // IP ごとの回数の上限 (src/index.ts)。費用を守るためのもので、ふつうの使い方では当たらない高さ
   "ratelimits": [
     { "name": "LIMITER", "namespace_id": "3001", "simple": { "limit": 300, "period": 60 } },
-    // /v1/forward/batch の回数 (1 回に 20 件まで)。D1 が断らないよう、件数で 1 分 200 件までに抑える
+    // /v1/forward/batch の回数 (1 回に 20 件まで)。1 分 200 件までに抑える
     { "name": "BATCH_LIMITER", "namespace_id": "3002", "simple": { "limit": 10, "period": 60 } },
   ],
   "observability": { "enabled": true, "head_sampling_rate": 1 },

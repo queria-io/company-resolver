@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: posting_rare
+    description: |
+      出現する法人が 10,000 以下の bigram ごとの法人の一覧です。商号を 2 文字ずつに分けた並び（bigram）で、近い商号の法人を検索するのに使います。
+      「国税庁法人番号公表サイト」（国税庁）（https://www.houjin-bangou.nta.go.jp/）を加工して作成。
+    access: public
+    columns:
+      - name: shard
+        data_type: integer
+      - name: g
+        data_type: varchar
+      - name: lg_code
+        data_type: varchar
+      - name: corporate_number
+        data_type: varchar
+      - name: legal_form
+        data_type: varchar
+      - name: core
+        data_type: varchar
+      - name: name
+        data_type: varchar

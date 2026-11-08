@@ -5,13 +5,14 @@ import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 
 import { type ReadLog } from "./parquet";
-import { forward, forwardMany, type Input, loadCities, type Sql } from "./forward";
+import { type AssetLog, assetFiles, loadVersion, rowReader } from "./assets";
+import { forward, forwardMany, type Input, loadCities } from "./forward";
 import { isCorporateNumber, reverse } from "./reverse";
 import { loadIndex } from "./source";
 
 export type Env = {
-  /** 正引きの索引 (scripts/sync_d1.py が入れる) */
-  DB: D1Database;
+  /** 正引きの索引。Worker と一緒にデプロイした静的アセット (scripts/build-data.mjs が public/data/ に置く) */
+  ASSETS: Fetcher;
   /** 逆引きの索引 (Parquet) の置き場 */
   DATA: R2Bucket;
   /** 索引の置き場。FDL のリポジトリ (「…/」) か目録 (「….json」)。src/source.ts */
@@ -24,12 +25,11 @@ export type Env = {
 
 const MAX_LIMIT = 20;
 /**
- * まとめて照合する問い合わせの数の上限。D1 は 1 件ずつ順に処理し、10 秒のあいだに使った資源が多すぎると
- * しばらく問い合わせを断る (近い商号の検索を 1 秒に約 17 件、10 秒続けると断られた)。
- * 近い商号の検索が 20 件続いても約 1 秒で終わる数にする
+ * まとめて照合する問い合わせの数の上限。1 回の呼び出しの CPU 時間と、URL で渡すときの長さ (Cloudflare の
+ * 上限は 16 KB) に収める
  */
 const MAX_BATCH = 20;
-/** name の文字数の上限。D1 に渡す bigram の一覧と編集距離の計算は name の長さに比例するため、上限を置く */
+/** name の文字数の上限。読む bigram のファイルと編集距離の計算は name の長さに比例するため、上限を置く */
 const MAX_NAME_LENGTH = 200;
 /** address の文字数の上限。住所から市区町村を探すのに、市区町村の数だけ address を走査するため */
 const MAX_ADDRESS_LENGTH = 200;
@@ -38,13 +38,8 @@ const MAX_BATCH_BODY_BYTES = 64 * 1024;
 
 const app = new Hono<{ Bindings: Env }>();
 
-// D1 が混み合って断ったときは、少し待てば通るので 503 と Retry-After で返す
 app.onError((err, c) => {
   if (err instanceof HTTPException) return err.getResponse();
-  if (/overloaded/i.test(err.message)) {
-    c.header("Retry-After", "10");
-    return c.json({ error: "混み合っています。10 秒ほど待ってから呼んでください" }, 503);
-  }
   console.error(err);
   return c.json({ error: "サーバーで問題が起きました" }, 500);
 });
@@ -52,7 +47,7 @@ app.onError((err, c) => {
 // ブラウザの DuckDB (Queria の resolve_company) からも呼ぶ
 app.use("*", cors({ origin: "*", allowMethods: ["GET", "POST"] }));
 
-// DuckDB の read_json は GET の前に HEAD を送る。HEAD では照合せずに答え、D1 を 2 回引かず、回数にも数えない
+// DuckDB の read_json は GET の前に HEAD を送る。HEAD では照合せずに答え、索引を 2 回読まず、回数にも数えない
 // (Hono は HEAD を GET の処理に回すので、元の要求のメソッドで見分ける)
 const answerHead: MiddlewareHandler = async (c, next) =>
   c.req.raw.method === "HEAD" ? c.body(null, 200, { "content-type": "application/json" }) : next();
@@ -87,26 +82,30 @@ const inputOf = (name: unknown, address: unknown, limit: unknown): Input | strin
   };
 };
 
-/** D1 の batch。読んだ行数 (課金の単位) を足し合わせる */
-const d1 = (db: D1Database) => {
-  const log = { rowsRead: 0 };
-  const sql: Sql = async (statements) => {
-    const results = await db.batch(
-      statements.map(({ sql, params }) => db.prepare(sql).bind(...params)),
-    );
-    log.rowsRead += results.reduce((n, r) => n + r.meta.rows_read, 0);
-    return results.map((r) => r.results);
-  };
-  return { sql, log };
+/** 静的アセットの索引を読む口と、読んだファイルの数・量 */
+const assets = (fetcher: Fetcher) => {
+  const log: AssetLog = { reads: 0, bytes: 0 };
+  const files = assetFiles(fetcher);
+  return { read: rowReader(files, log), log, version: loadVersion(files) };
+};
+
+/** 索引のバージョンと、読んだファイルの数と量 (計測用) */
+const assetHeaders = async (
+  c: Context<{ Bindings: Env }>,
+  log: AssetLog,
+  version: Promise<string | null>,
+) => {
+  c.header("X-Data-Version", (await version) ?? "");
+  c.header("X-Asset-Reads", String(log.reads));
+  c.header("X-Asset-Bytes", String(log.bytes));
 };
 
 app.get("/v1/forward", async (c) => {
   const input = inputOf(c.req.query("name"), c.req.query("address"), c.req.query("limit"));
   if (typeof input === "string") return c.json({ error: input }, 400);
-  const { sql, log } = d1(c.env.DB);
-  const answer = await forward(sql, await loadCities(sql), input);
-  // D1 から読んだ行数 (計測用)
-  c.header("X-D1-Rows-Read", String(log.rowsRead));
+  const { read, log, version } = assets(c.env.ASSETS);
+  const answer = await forward(read, await loadCities(read), input);
+  await assetHeaders(c, log, version);
   return c.json(answer);
 });
 
@@ -132,14 +131,14 @@ const forwardBatch = async (c: Context<{ Bindings: Env }>, queries: unknown) => 
       address: typeof address === "string" && address !== "" ? address : null,
     });
   }
-  // 回数は D1 を引く問い合わせだけ数える (誤りのある問い合わせで上限を使わせない)
+  // 回数は索引を読む問い合わせだけ数える (誤りのある問い合わせで上限を使わせない)
   const ip = c.req.header("cf-connecting-ip");
   if (c.env.BATCH_LIMITER && ip && !(await c.env.BATCH_LIMITER.limit({ key: ip })).success) {
     return c.json({ error: "呼び出しが多すぎます。少し待ってから呼んでください" }, 429);
   }
-  const { sql, log } = d1(c.env.DB);
-  const answers = await forwardMany(sql, await loadCities(sql), inputs);
-  c.header("X-D1-Rows-Read", String(log.rowsRead));
+  const { read, log, version } = assets(c.env.ASSETS);
+  const answers = await forwardMany(read, await loadCities(read), inputs);
+  await assetHeaders(c, log, version);
   return c.json({ results: answers.map((a, i) => ({ input: echoes[i], ...a })) });
 };
 

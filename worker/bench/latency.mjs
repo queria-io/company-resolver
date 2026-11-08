@@ -1,4 +1,4 @@
-// 正引きの応答時間を、手元から API ごとに計測する。各問い合わせを 6 回流し、2 回目以降の中央値を出す
+// 正引きの応答時間を、手元から API ごとに計測する。各問い合わせを 6 回流し、1 回目と、2 回目以降の中央値を出す
 // usage: node bench/latency.mjs <API の起点> [<API の起点> ...]
 //   例: node bench/latency.mjs https://company-resolver.queria.io
 import { readFileSync } from "node:fs";
@@ -26,12 +26,14 @@ for (const origin of process.argv.slice(2)) {
     }
     const m = median(ms.slice(1));
     all.push(m);
-    const info = ["x-d1-rows-read", "x-r2-reads"]
+    const info = ["x-asset-reads", "x-asset-bytes", "x-r2-reads"]
       .filter((h) => headers.get(h) !== null)
       .map((h) => `${h}=${headers.get(h)}`)
       .concat([...errors].map((s) => `status=${s}`))
       .join(" ");
-    console.log(`${origin}\t${q.name}\t${Math.round(m)} ms\t${info}`);
+    console.log(
+      `${origin}\t${q.name}\t1 回目 ${Math.round(ms[0])} ms\t${Math.round(m)} ms\t${info}`,
+    );
   }
   console.log(`${origin}\tmedian of medians\t${Math.round(median(all))} ms`);
 }

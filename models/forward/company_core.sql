@@ -1,4 +1,4 @@
--- 法人ごとの商号の本体・法人格・lg_code・商号。scripts/sync_d1.py が D1 の company に入れる
+-- 法人ごとの商号の本体・法人格・lg_code・商号。正引きの索引 (exact_name・posting_rare・posting_common) の元
 SELECT corporate_number,
     {{ core_name('name') }} AS core,
     {{ legal_form('name') }} AS legal_form,
