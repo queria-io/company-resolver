@@ -3,6 +3,7 @@
   "name": "queria-company-resolver",
   "main": "src/index.ts",
   "compatibility_date": "2025-12-01",
+  "account_id": "57c6a116efc637fc3f21d0affea15508",
   "workers_dev": true,
   "r2_buckets": [{ "binding": "DATA", "bucket_name": "queria" }],
   "vars": {
