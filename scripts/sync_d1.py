@@ -223,7 +223,7 @@ def verify(con: duckdb.DuckDBPyConnection, target: D1 | SQLite, new: str) -> Non
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--full", action="store_true", help="全件を入れ直す")
-    p.add_argument("--database", default="company-resolver", help="D1 のデータベース名")
+    p.add_argument("--database", default="company-resolver-d1-test", help="D1 のデータベース名")
     p.add_argument("--sqlite", help="D1 の代わりに反映する手元の SQLite ファイル")
     p.add_argument("--source", default=SOURCE, help="FDL のリポジトリの URL (…/)")
     args = p.parse_args()

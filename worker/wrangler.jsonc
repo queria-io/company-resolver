@@ -11,8 +11,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "company-resolver",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "company-resolver-d1-test",
+      "database_id": "01959e19-3242-4374-8f44-a273e4b18c14",
     },
   ],
   // 逆引きの索引 (Parquet) の置き場
