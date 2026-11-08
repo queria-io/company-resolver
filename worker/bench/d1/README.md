@@ -24,3 +24,9 @@ cd worker && pnpm tsx bench/d1/run.ts bench/d1/out queries.jsonl
 for f in bench/d1/out/sql/*.sql; do npx wrangler d1 execute company-resolver-d1-test --remote --file "$f" -c bench/d1/wrangler.jsonc; done
 npx wrangler deploy -c bench/d1/wrangler.jsonc
 ```
+
+応答時間は、手元から本番（R2）と計測用の Worker（D1）に同じ問い合わせを流して比較する。
+
+```bash
+cd worker && node bench/d1/latency.mjs https://company-resolver.queria.io https://company-resolver-d1-test.flops.workers.dev
+```
