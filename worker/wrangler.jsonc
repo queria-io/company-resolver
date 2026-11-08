@@ -11,7 +11,7 @@
   "vars": {
     // 索引の置き場。Queria の company_resolver データセット (FDL のリポジトリ) のプレフィックス。
     // refs/heads/main が指すバージョンを読む (src/source.ts)
-    "DATA_SOURCE": "",
+    "DATA_SOURCE": "903e9c75-6563-45c6-a3dd-0accc63e4d45/",
   },
   // IP ごとの回数の上限 (src/index.ts)。費用を守るためのもので、ふつうの使い方では当たらない高さ
   "ratelimits": [
