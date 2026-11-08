@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  bigrams,
-  compareCodePoints,
-  coreName,
-  legalForm,
-  levenshtein,
-  nfkc,
-  shardOf,
-} from "../src/normalize";
+import { bigrams, coreName, legalForm, levenshtein, nfkc } from "../src/normalize";
 
 describe("normalize", () => {
   it("法人格を分けて商号の本体を取る", () => {
@@ -33,20 +25,9 @@ describe("normalize", () => {
     expect(bigrams("")).toEqual([]);
   });
 
-  it("ファイル番号はコードポイントの和の余り", () => {
-    expect(shardOf("AB", 256)).toBe((65 + 66) % 256);
-  });
-
   it("編集距離は文字単位", () => {
     expect(levenshtein("クエリア", "クエリ")).toBe(1);
     expect(levenshtein("あいう", "あえう")).toBe(1);
     expect(levenshtein("", "abc")).toBe(3);
-  });
-
-  it("文字列はコードポイント順に比べる (Parquet の統計と同じ順)", () => {
-    // U+FA11 (﨑) は UTF-16 ではサロゲートペアの 𠮷 (U+20BB7) より後ろだが、コードポイント順では前
-    expect(compareCodePoints("山﨑", "山𠮷")).toBeLessThan(0);
-    expect(compareCodePoints("AB", "AB")).toBe(0);
-    expect(compareCodePoints("A", "AB")).toBeLessThan(0);
   });
 });

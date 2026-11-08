@@ -20,3 +20,30 @@ jobs:
     with:
       dataset_name: company_resolver
     secrets: inherit
+
+  # 正引きの索引を D1 に反映する (scripts/sync_d1.py)。Sync で進んだ main と、D1 に反映済みのバージョンの差分を書く
+  d1:
+    needs: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: worker/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: worker/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: worker
+      - run: uv sync
+      # 依存のインストールに API トークンを渡さないよう、反映するステップだけに付ける
+      - run: uv run python scripts/sync_d1.py
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

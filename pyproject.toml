@@ -8,3 +8,8 @@ dependencies = [
     "dbt-duckdb>=1.10.0",
     "pyarrow>=21",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

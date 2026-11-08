@@ -8,9 +8,6 @@ keywords:
 sources:
   - path: https://www.houjin-bangou.nta.go.jp/
 fields:
-  - name: shard
-    title: ファイルの番号
-    description: "posting と同じ"
   - name: g
     title: bigram
   - name: df
