@@ -10,6 +10,13 @@ GET /v1/forward?name=株式会社クエリア&address=東京都千代田区紀�
 
 応答は `status`（`matched` / `ambiguous` / `candidates` / `not_found`）、`same_name_count`、`candidates`（法人番号・商号・都道府県・市区町村・`evidence`）。ヘッダーの `X-D1-Rows-Read` は、その問い合わせで D1 から読んだ行数。
 
+複数の企業をまとめて照合するときは、1 回に 100 件までを `POST /v1/forward/batch` に渡す。応答の `results` は、`queries` と同じ順に、1 件ずつの正引きと同じ形の応答を並べたもの。IP ごとに 1 分 10 回まで（`BATCH_LIMITER`）。
+
+```
+POST /v1/forward/batch
+{"queries": [{"name": "株式会社クエリア", "address": "東京都千代田区"}, {"name": "クエリア商事株式会社", "limit": 3}]}
+```
+
 逆引きは法人番号から、その法人の今の状態を返す。商号・フリガナ・法人種別・所在地・lg_code・法人番号の指定年月日に加え、`status`（`active` / `closed`）、閉鎖日と閉鎖の事由、合併の承継先の法人番号、旧商号（`former_names`）と旧所在地（`former_addresses`）を返す。閉鎖した法人も引ける。無ければ 404。旧商号と旧所在地は、法人番号のデータセットが変更履歴を持つ分だけ入る。
 
 ```
@@ -34,7 +41,7 @@ GET /v1/reverse?corporate_number=1180301018771
 - `city`: 市区町村の lg_code・都道府県名・市区町村名。Worker は 5 分ごとに読み直す
 - `meta`: 最後に反映したバージョンの ID（`version`）、テーブルの定義のバージョン（`schema`）、反映の途中ならその反映先（`applying`）
 
-正引きは、`company` で商号の本体が同じ法人を引く文と、`gram`・`posting`・`company` で近い商号を引く文を、1 回の batch で流す。商号と法人格（住所があれば市区町村も）が一致する法人が 1 件だけなら前者で答え、それ以外は後者の候補を編集距離で並べる。
+正引きは、まず `company` で商号の本体が同じ法人を引く。商号と法人格（住所があれば市区町村も）が一致する法人が 1 件だけなら、それで答える。決まらないときだけ、`gram`・`posting`・`company` で近い商号を引き、候補を編集距離で並べる（D1 への往復は 2 回）。まとめて照合するときは、問い合わせごとの文をそれぞれの往復で 1 つの batch にまとめる。
 
 反映は、`meta` のバージョンと新しいバージョンの `forward.company_core`・`forward.posting` を比べ、変わった行だけを主キーで消す・書く。`gram` と `city` は毎回全部を書き直す。書き終えたら法人数と `posting` の行数を元データと照合し、合っていれば最後に `meta` を書く。途中で失敗したら同じコマンドを流し直せばよい（書き始める前に `meta` の `applying` に反映先のバージョンを書き、流し直す前に main が別のバージョンに進んでいたら全件を入れ直す）。
 
