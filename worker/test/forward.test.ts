@@ -173,6 +173,12 @@ describe("/v1/forward/batch", () => {
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("X-D1-Rows-Read")).toBeNull();
+    const single = await app.request(
+      `/v1/forward?${new URLSearchParams({ name: "株式会社クエリア" })}`,
+      { method: "HEAD" },
+      env,
+    );
+    expect(single.headers.get("X-D1-Rows-Read")).toBeNull();
   });
 
   it("GET で address の数が name と違えば 400", async () => {

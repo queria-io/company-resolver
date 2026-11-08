@@ -1,7 +1,8 @@
 // 法人名寄せ API。正引きは企業名 (と住所) から法人番号の候補を、逆引きは法人番号から法人を返す。照合の規則は DESIGN.md
-import { type Context, Hono } from "hono";
+import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
+import { HTTPException } from "hono/http-exception";
 
 import { type ReadLog } from "./parquet";
 import { forward, forwardMany, type Input, loadCities, type Sql } from "./forward";
@@ -39,6 +40,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 // D1 が混み合って断ったときは、少し待てば通るので 503 と Retry-After で返す
 app.onError((err, c) => {
+  if (err instanceof HTTPException) return err.getResponse();
   if (/overloaded/i.test(err.message)) {
     c.header("Retry-After", "10");
     return c.json({ error: "混み合っています。10 秒ほど待ってから呼んでください" }, 503);
@@ -52,9 +54,10 @@ app.use("*", cors({ origin: "*", allowMethods: ["GET", "POST"] }));
 
 // DuckDB の read_json は GET の前に HEAD を送る。HEAD では照合せずに答え、D1 を 2 回引かず、回数にも数えない
 // (Hono は HEAD を GET の処理に回すので、元の要求のメソッドで見分ける)
-app.use("/v1/*", async (c, next) =>
-  c.req.raw.method === "HEAD" ? c.body(null, 200, { "content-type": "application/json" }) : next(),
-);
+const answerHead: MiddlewareHandler = async (c, next) =>
+  c.req.raw.method === "HEAD" ? c.body(null, 200, { "content-type": "application/json" }) : next();
+app.use("/v1/forward", answerHead);
+app.use("/v1/forward/batch", answerHead);
 
 // 鍵は呼んだ元の IP。上限は Cloudflare の拠点ごとに数えるので目安
 app.use("/v1/*", async (c, next) => {
@@ -109,10 +112,6 @@ app.get("/v1/forward", async (c) => {
 
 /** まとめて照合する。応答の results は queries と同じ順で、それぞれに入力 (input) を付ける */
 const forwardBatch = async (c: Context<{ Bindings: Env }>, queries: unknown) => {
-  const ip = c.req.header("cf-connecting-ip");
-  if (c.env.BATCH_LIMITER && ip && !(await c.env.BATCH_LIMITER.limit({ key: ip })).success) {
-    return c.json({ error: "呼び出しが多すぎます。少し待ってから呼んでください" }, 429);
-  }
   if (!Array.isArray(queries) || queries.length === 0 || queries.length > MAX_BATCH) {
     return c.json({ error: `1〜${MAX_BATCH} 件の問い合わせを渡してください` }, 400);
   }
@@ -132,6 +131,11 @@ const forwardBatch = async (c: Context<{ Bindings: Env }>, queries: unknown) => 
       name: String(name),
       address: typeof address === "string" && address !== "" ? address : null,
     });
+  }
+  // 回数は D1 を引く問い合わせだけ数える (誤りのある問い合わせで上限を使わせない)
+  const ip = c.req.header("cf-connecting-ip");
+  if (c.env.BATCH_LIMITER && ip && !(await c.env.BATCH_LIMITER.limit({ key: ip })).success) {
+    return c.json({ error: "呼び出しが多すぎます。少し待ってから呼んでください" }, 429);
   }
   const { sql, log } = d1(c.env.DB);
   const answers = await forwardMany(sql, await loadCities(sql), inputs);

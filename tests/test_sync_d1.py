@@ -163,6 +163,7 @@ def test_full_can_be_repeated(con):
         ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION}, False, "v1"),
         ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION, "applying": "v2"}, False, "v1"),  # 同じ差分を流し直す
         ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION, "applying": "v9"}, False, None),
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION, "applying": "v1"}, False, "v1"),  # meta を書き終えた後に止まった
         ({"version": "v1", "schema": "old"}, False, None),
         ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION}, True, None),
         ({}, False, None),

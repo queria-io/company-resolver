@@ -78,7 +78,7 @@ export const loadCities = (sql: Sql, now = Date.now()): Promise<City[]> => {
   const cities = sql([{ sql: CITIES, params: [] }]).then(([rows]) => rows as City[]);
   const entry = { at: now, cities };
   cachedCities = entry;
-  // 失敗したときと、空だったとき (全件の入れ直しで city を入れる前) は覚えない (次の問い合わせで読み直す)
+  // 失敗したときと、空だったときは覚えない (次の問い合わせで読み直す)
   const forget = () => {
     if (cachedCities === entry) cachedCities = null;
   };
@@ -130,17 +130,26 @@ const topByScore = (rows: readonly Scored[], core: string): { r: Scored; ed: num
     )
     .slice(0, COMPARE_TOP);
 
+/** 1 件の問い合わせを、正規化した商号と住所の市区町村にしたもの */
+type Query = {
+  input: Input;
+  name: string;
+  lf: string | null;
+  core: string;
+  cityCodes: ReadonlySet<string>;
+  legalOk: (p: Row) => boolean;
+  cityOk: (p: Row) => boolean;
+};
+
 /** 照合の結果を応答の形にする */
 const answerOf = (
-  input: Input & { lf: string | null },
-  cities: readonly City[],
-  cityCodes: ReadonlySet<string>,
+  q: Query,
+  cityOf: ReadonlyMap<string, City>,
   status: Status,
   sameCount: number | null,
   ranked: readonly Ranked[],
 ): Answer => {
-  const { name, lf } = input;
-  const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
+  const { input, name, lf, cityCodes } = q;
   return {
     status,
     same_name_count: sameCount,
@@ -157,17 +166,6 @@ const answerOf = (
       },
     })),
   };
-};
-
-/** 1 件の問い合わせを、正規化した商号と住所の市区町村にしたもの */
-type Query = {
-  input: Input;
-  name: string;
-  lf: string | null;
-  core: string;
-  cityCodes: ReadonlySet<string>;
-  legalOk: (p: Row) => boolean;
-  cityOk: (p: Row) => boolean;
 };
 
 const queryOf = (input: Input, cities: readonly City[]): Query => {
@@ -187,14 +185,21 @@ const queryOf = (input: Input, cities: readonly City[]): Query => {
   };
 };
 
+/** 商号が同じ法人のうち、法人格 (住所の市区町村が分かれば市区町村も) が一致するもの */
+const sameOf = (q: Query, exact: readonly Row[]): Row[] =>
+  exact.filter((p) => q.legalOk(p) && (q.cityCodes.size === 0 || q.cityOk(p)));
+
 /**
  * 商号が同じ法人で答えが決まれば、その応答。商号と法人格 (住所の市区町村が分かれば市区町村も) が一致する
  * 法人が 1 件だけなら matched。決まらなければ null
  */
-const answerByExact = (q: Query, cities: readonly City[], exact: readonly Row[]): Answer | null => {
+const answerByExact = (
+  q: Query,
+  cityOf: ReadonlyMap<string, City>,
+  exact: readonly Row[],
+): Answer | null => {
   // 住所の市区町村が分かるときは、市区町村まで一致して初めて商号の一致とみなす
-  const same = exact.filter((p) => q.legalOk(p) && (q.cityCodes.size === 0 || q.cityOk(p)));
-  if (same.length !== 1) return null;
+  if (sameOf(q, exact).length !== 1) return null;
   // 商号が同じで法人格や市区町村が違う法人も、後ろの候補に並べる
   const ranked = exact
     .map((p) => ({ p, ed: 0, cityOk: q.cityOk(p) }))
@@ -204,20 +209,13 @@ const answerByExact = (q: Query, cities: readonly City[], exact: readonly Row[])
         Number(q.legalOk(b.p)) - Number(q.legalOk(a.p)) ||
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
-  return answerOf(
-    { ...q.input, name: q.name, lf: q.lf },
-    cities,
-    q.cityCodes,
-    "matched",
-    1,
-    ranked,
-  );
+  return answerOf(q, cityOf, "matched", 1, ranked);
 };
 
 /** bigram の索引で見つけた近い商号を候補に並べた応答 */
 const answerByFuzzy = (
   q: Query,
-  cities: readonly City[],
+  cityOf: ReadonlyMap<string, City>,
   exact: readonly Row[],
   fuzzy: readonly Scored[],
 ): Answer => {
@@ -251,16 +249,8 @@ const answerByFuzzy = (
   const isExact =
     top !== undefined && top.ed === 0 && top.legal && (q.cityCodes.size === 0 || top.cityOk);
   const status: Status = isExact ? "ambiguous" : ranked.length > 0 ? "candidates" : "not_found";
-  const same = exact.filter((p) => q.legalOk(p) && (q.cityCodes.size === 0 || q.cityOk(p)));
-  const sameCount = fuzzy.length > 0 || exact.length > 0 ? same.length : null;
-  return answerOf(
-    { ...q.input, name: q.name, lf: q.lf },
-    cities,
-    q.cityCodes,
-    status,
-    sameCount,
-    ranked,
-  );
+  const sameCount = fuzzy.length > 0 || exact.length > 0 ? sameOf(q, exact).length : null;
+  return answerOf(q, cityOf, status, sameCount, ranked);
 };
 
 /**
@@ -274,8 +264,9 @@ export const forwardMany = async (
   inputs: readonly Input[],
 ): Promise<Answer[]> => {
   const queries = inputs.map((input) => queryOf(input, cities));
+  const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
   const exact = (await sql(queries.map((q) => ({ sql: EXACT, params: [q.core] })))) as Row[][];
-  const answers = queries.map((q, i) => answerByExact(q, cities, exact[i]));
+  const answers = queries.map((q, i) => answerByExact(q, cityOf, exact[i]));
   const rest = queries.flatMap((q, i) => (answers[i] === null ? [i] : []));
   const fuzzy = new Map<number, Scored[]>();
   if (rest.length > 0) {
@@ -292,7 +283,7 @@ export const forwardMany = async (
     rest.forEach((i, k) => fuzzy.set(i, rows[k]));
   }
   return queries.map(
-    (q, i) => answers[i] ?? answerByFuzzy(q, cities, exact[i], fuzzy.get(i) ?? []),
+    (q, i) => answers[i] ?? answerByFuzzy(q, cityOf, exact[i], fuzzy.get(i) ?? []),
   );
 };
 

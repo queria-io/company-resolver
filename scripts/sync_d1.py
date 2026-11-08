@@ -12,6 +12,7 @@ gram と city は毎回全部を書き直す。書き込みは主キーで消す
 
 meta が無いとき・D1 のテーブルの定義 (SCHEMA) が変わったとき・前のカタログを読めないとき・--full のときは、
 全件を別の表 (company_next など) に入れ、照合が合ったら今の表と入れ替える。入れ替えるまで正引きは今の表を引く。
+入れ替えと meta の書き込みは 1 回の要求で流すので、新旧の混ざった表は見えない。照合が合わなければ別の表を消す。
 
 反映したら法人数と posting の行数を元データと照合し、合っていれば最後に meta を書く。合わなければ止まるので、
 --full で入れ直す。SQL のファイルは書き終えたものから順に流す。
@@ -273,6 +274,10 @@ class D1:
     def run_file(self, path: Path) -> None:
         self._wrangler("--file", str(path))
 
+    def atomic(self, statements: list[str]) -> None:
+        """1 回の要求にまとめて流す。D1 は要求を 1 件ずつ順に処理するので、途中にほかの問い合わせが割り込まない"""
+        self._wrangler("--command", ";\n".join(statements))
+
 
 class SQLite:
     """D1 の代わりに手元の SQLite ファイルに流す"""
@@ -290,6 +295,9 @@ class SQLite:
         self.db.executescript(path.read_text(encoding="utf-8"))
         self.db.commit()
 
+    def atomic(self, statements: list[str]) -> None:
+        self.db.executescript("BEGIN;\n" + ";\n".join(statements) + ";\nCOMMIT;")
+
 
 def applied_meta(target: D1 | SQLite) -> dict[str, str]:
     """D1 の meta (version: 最後に反映したバージョン、schema: そのときのテーブルの定義のバージョン)"""
@@ -306,8 +314,9 @@ def base_version(meta: dict[str, str], version: str, full: bool) -> tuple[str | 
         return None, "D1 に反映済みのバージョンが無い"
     if meta.get("schema") != SCHEMA_VERSION:
         return None, "D1 のテーブルの定義が変わった"
-    # 前の回が別のバージョンへの差分の途中で止まっていたら、その分の行を消せない
-    if meta.get("applying") not in (None, version):
+    # 前の回が別のバージョンへの反映の途中で止まっていたら、その分の行を消せない。applying が version と同じなら
+    # 前の回は meta を書き終えている
+    if meta.get("applying") not in (None, version, meta["version"]):
         return None, f"前の回が {meta['applying']} への反映の途中で止まっている"
     return meta["version"], None
 
@@ -370,20 +379,27 @@ def main() -> None:
                 target.run_file(f)
                 f.unlink()
 
+    # 最後に書く meta。途中で止まれば meta は前のままなので、次の回も同じ差分を流し直す
+    done = [
+        f"INSERT OR REPLACE INTO meta VALUES ('schema', {literal(SCHEMA_VERSION)}), ('version', {literal(version)})",
+        "DELETE FROM meta WHERE key = 'applying'",
+    ]
     if applied is not None:
         # 今の表を書き換え始める前に、どのバージョンへの反映かを残す
         target.query(f"INSERT OR REPLACE INTO meta VALUES ('applying', {literal(version)})")
         run(diff(con, "new"))
         verify(con, target, "new")
+        target.atomic(done)
     else:
         run(full(con, "new"))
-        verify(con, target, "new", "_next")
-        run(swap())
-    # 最後に書く。途中で止まれば meta は前のままなので、次の回も同じ差分を流し直す
-    target.query(
-        f"INSERT OR REPLACE INTO meta VALUES ('schema', {literal(SCHEMA_VERSION)}), ('version', {literal(version)})"
-    )
-    target.query("DELETE FROM meta WHERE key = 'applying'")
+        try:
+            verify(con, target, "new", "_next")
+        except SystemExit:
+            # 合わなかった表は使わないので消す (残すと D1 の大きさが 2 倍のまま)
+            target.atomic([f"DROP TABLE IF EXISTS {t}_next" for t in DATA_TABLES])
+            raise
+        # 表の入れ替えと meta を 1 回で流し、新旧の混ざった表を正引きに見せない
+        target.atomic(swap() + done)
     print(f"反映しました: {version}")
 
 
