@@ -62,7 +62,13 @@ def make(con: duckdb.DuckDBPyConnection, alias: str, companies: dict, with_compa
 def apply(db: sqlite3.Connection, statements) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         for f in sync_d1.write_files(statements, Path(tmp)):
-            db.executescript(f.read_text())
+            db.executescript(f.read_text(encoding="utf-8"))
+
+
+def load(db: sqlite3.Connection, con: duckdb.DuckDBPyConnection, version: str) -> None:
+    """全件を入れて今の表と入れ替える"""
+    apply(db, sync_d1.full(con, version))
+    apply(db, sync_d1.swap())
 
 
 def dump(db: sqlite3.Connection) -> dict:
@@ -87,18 +93,18 @@ def small_batches(monkeypatch):
 
 def test_diff_matches_full(con):
     db = sqlite3.connect(":memory:")
-    apply(db, sync_d1.full(con, "old"))
+    load(db, con, "old")
     sync_d1.prepare_diff(con, "old", "new")
     apply(db, sync_d1.diff(con, "new"))
 
     expected = sqlite3.connect(":memory:")
-    apply(expected, sync_d1.full(con, "new"))
+    load(expected, con, "new")
     assert dump(db) == dump(expected)
 
 
 def test_diff_can_be_applied_twice(con):
     db = sqlite3.connect(":memory:")
-    apply(db, sync_d1.full(con, "old"))
+    load(db, con, "old")
     sync_d1.prepare_diff(con, "old", "new")
     apply(db, sync_d1.diff(con, "new"))
     once = dump(db)
@@ -111,3 +117,57 @@ def test_diff_writes_only_changed_companies(con):
     sql = "\n".join(sync_d1.diff(con, "new"))
     assert "1000000000001" not in sql
     assert "1000000000004" in sql  # 閉鎖した法人を消す
+
+
+def test_statements_fit_in_byte_limit(monkeypatch):
+    """長い商号が続いても、1 文が BYTES_PER_STATEMENT を超えない"""
+    monkeypatch.setattr(sync_d1, "ROWS_PER_STATEMENT", 500)
+    monkeypatch.setattr(sync_d1, "BYTES_PER_STATEMENT", 1_000)
+    rows = [(f"{i:013}", "長" * 50, "株式会社", "131016", "株式会社" + "長" * 50) for i in range(20)]
+    statements = list(sync_d1.insert("company", rows))
+    assert len(statements) > 1
+    head = len("INSERT INTO company VALUES ".encode())
+    assert all(len(s.encode()) - head <= 1_000 for s in statements)
+    db = sqlite3.connect(":memory:")
+    db.execute(sync_d1.SCHEMA[0])
+    for s in statements:
+        db.execute(s)
+    assert db.execute("SELECT count(*) FROM company").fetchone()[0] == 20
+
+
+def test_full_keeps_current_tables_until_swap(con):
+    db = sqlite3.connect(":memory:")
+    load(db, con, "old")
+    before = dump(db)
+    apply(db, sync_d1.full(con, "new"))
+    assert dump(db) == before
+    apply(db, sync_d1.swap())
+    expected = sqlite3.connect(":memory:")
+    load(expected, con, "new")
+    assert dump(db) == dump(expected)
+
+
+def test_full_can_be_repeated(con):
+    """入れ替えた後の索引と、次に作る索引の名前が重ならない"""
+    db = sqlite3.connect(":memory:")
+    load(db, con, "old")
+    load(db, con, "new")
+    load(db, con, "new")
+    indexes = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'company'")]
+    assert len([i for i in indexes if i.startswith("company_core")]) == 1
+
+
+@pytest.mark.parametrize(
+    ("meta", "full", "expected"),
+    [
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION}, False, "v1"),
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION, "applying": "v2"}, False, "v1"),  # 同じ差分を流し直す
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION, "applying": "v9"}, False, None),
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION, "applying": "v1"}, False, "v1"),  # meta を書き終えた後に止まった
+        ({"version": "v1", "schema": "old"}, False, None),
+        ({"version": "v1", "schema": sync_d1.SCHEMA_VERSION}, True, None),
+        ({}, False, None),
+    ],
+)
+def test_base_version(meta, full, expected):
+    assert sync_d1.base_version(meta, "v2", full)[0] == expected

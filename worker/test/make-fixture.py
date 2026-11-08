@@ -20,7 +20,7 @@ import duckdb
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from sync_d1 import full, write_files  # noqa: E402
+from sync_d1 import full, swap, write_files  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixture"
 
@@ -85,8 +85,8 @@ def main() -> None:
         con = duckdb.connect()
         con.execute(f"ATTACH 'ducklake:sqlite:{tmp}/work.sqlite' AS c (READ_ONLY)")
         write_manifest(con)
-        sql = write_files(full(con, "c"), tmp / "sql")
-        (FIXTURE / "forward.sql").write_text("".join(f.read_text() for f in sql))
+        sql = list(write_files([*full(con, "c"), *swap()], tmp / "sql"))
+        (FIXTURE / "forward.sql").write_text("".join(f.read_text(encoding="utf-8") for f in sql), encoding="utf-8")
         shutil.rmtree(FIXTURE / "forward")
 
 

@@ -6,14 +6,16 @@ usage (リポジトリの直下で):
   uv run python scripts/sync_d1.py --sqlite FILE   # D1 の代わりに手元の SQLite に反映する (ベンチマーク用)
 
 読む元は FDL の refs/heads/main が指すバージョン。D1 の meta に最後に反映したバージョンがあり、そのカタログを
-読めれば、2 つのバージョンを比べて変わった行だけを書く。meta が無いとき・D1 のテーブルの定義 (SCHEMA) が
-変わったとき・前のカタログを読めないとき・--full のときは、テーブルを作り直して全件を入れる
-(そのあいだ正引きは失敗する)。
-反映したら法人数と posting の行数を元データと照合し、合っていれば最後に meta を書く。合わなければ止まるので、
---full で入れ直す。
+読めれば、2 つのバージョンを比べて変わった行だけを書く。差分は法人番号の順に、法人 CHUNK 社ずつまとめて書く。
+gram と city は毎回全部を書き直す。書き込みは主キーで消す・置き換える文だけなので、途中で失敗しても同じコマンドを
+流し直せばよい。途中で失敗したあとに main が別のバージョンに進んでいたら、全件を入れ直す (meta の applying)。
 
-書き込みは主キーで消す・置き換える文だけなので、途中で失敗しても同じコマンドを流し直せばよい。
-差分は法人番号の順に、法人 CHUNK 社ずつまとめて書く。gram と city は毎回全部を書き直す。
+meta が無いとき・D1 のテーブルの定義 (SCHEMA) が変わったとき・前のカタログを読めないとき・--full のときは、
+全件を別の表 (company_next など) に入れ、照合が合ったら今の表と入れ替える。入れ替えるまで正引きは今の表を引く。
+入れ替えと meta の書き込みは 1 回の要求で流すので、新旧の混ざった表は見えない。照合が合わなければ別の表を消す。
+
+反映したら法人数と posting の行数を元データと照合し、合っていれば最後に meta を書く。合わなければ止まるので、
+--full で入れ直す。SQL のファイルは書き終えたものから順に流す。
 """
 
 import argparse
@@ -24,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import uuid
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -44,7 +47,8 @@ SCHEMA = [
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID",
 ]
 INDEXES = ["CREATE INDEX company_core ON company (core)"]
-TABLES = ["company", "gram", "posting", "city", "meta"]
+# 全件を入れ直すときに作り直す表 (meta は残す)
+DATA_TABLES = ["company", "gram", "posting", "city"]
 # テーブルの定義のバージョン。meta の schema と違えば全件を入れ直す
 SCHEMA_VERSION = hashlib.sha256("\n".join(SCHEMA + INDEXES).encode()).hexdigest()[:12]
 
@@ -59,6 +63,8 @@ KEYS = {"company": ["corporate_number"], "gram": ["g"], "posting": ["g", "lg_cod
         "city": ["lg_code"]}
 
 ROWS_PER_STATEMENT = 500
+# 1 文の大きさの上限。D1 の 1 文の上限 (100 KB) に、文の頭と終わりの分の余裕を残す
+BYTES_PER_STATEMENT = 90_000
 # D1 の import に渡す 1 ファイルの大きさの上限
 BYTES_PER_FILE = 900 * 2**20
 # 差分を書くときに 1 つにまとめる法人の数
@@ -75,13 +81,23 @@ def literal(v: object) -> str:
     return "'" + str(v).replace("'", "''") + "'"
 
 
-def values(rows: Iterable[tuple]) -> str:
-    return ",".join("(" + ",".join(map(literal, r)) + ")" for r in rows)
+def row(r: tuple) -> str:
+    return "(" + ",".join(map(literal, r)) + ")"
 
 
-def batches(rows: list[tuple]) -> Iterator[list[tuple]]:
-    for i in range(0, len(rows), ROWS_PER_STATEMENT):
-        yield rows[i : i + ROWS_PER_STATEMENT]
+def joined(head: str, parts: Iterable[str], tail: str = "") -> Iterator[str]:
+    """parts を「,」でつなぎ、ROWS_PER_STATEMENT 個か BYTES_PER_STATEMENT バイトまでずつの文にする"""
+    buf: list[str] = []
+    size = 0
+    for p in parts:
+        n = len(p.encode()) + 1
+        if buf and (len(buf) >= ROWS_PER_STATEMENT or size + n > BYTES_PER_STATEMENT):
+            yield head + ",".join(buf) + tail
+            buf, size = [], 0
+        buf.append(p)
+        size += n
+    if buf:
+        yield head + ",".join(buf) + tail
 
 
 def rows_of(con: duckdb.DuckDBPyConnection, table: str, s: str) -> str:
@@ -114,56 +130,85 @@ def by_chunk(rows: Iterator[tuple]) -> Iterator[tuple[int, list[tuple]]]:
         yield current, buf
 
 
-def insert(table: str, rows: list[tuple], verb: str = "INSERT") -> Iterator[str]:
-    for b in batches(rows):
-        yield f"{verb} INTO {table} VALUES {values(b)}"
+def insert(table: str, rows: Iterable[tuple], verb: str = "INSERT") -> Iterator[str]:
+    yield from joined(f"{verb} INTO {table} VALUES ", map(row, rows))
 
 
-def delete(table: str, rows: list[tuple]) -> Iterator[str]:
+def delete(table: str, rows: Iterable[tuple]) -> Iterator[str]:
     """主キーの値で消す。1 列なら IN (…)、複数列なら行値の IN (VALUES …)"""
     keys = KEYS[table]
-    for b in batches(rows):
-        if len(keys) == 1:
-            yield f"DELETE FROM {table} WHERE {keys[0]} IN ({','.join(literal(r[0]) for r in b)})"
-        else:
-            yield f"DELETE FROM {table} WHERE ({', '.join(keys)}) IN (VALUES {values(b)})"
+    if len(keys) == 1:
+        yield from joined(f"DELETE FROM {table} WHERE {keys[0]} IN (", (literal(r[0]) for r in rows), ")")
+    else:
+        yield from joined(f"DELETE FROM {table} WHERE ({', '.join(keys)}) IN (VALUES ", map(row, rows), ")")
 
 
-def write_files(statements: Iterable[str], out: Path) -> list[Path]:
-    """1 行 1 文の SQL ファイルに分けて書く。BEGIN / COMMIT は D1 が受け付けないので書かない"""
+def write_files(statements: Iterable[str], out: Path) -> Iterator[Path]:
+    """1 行 1 文の SQL ファイルに分けて書き、書き終えたファイルから返す。BEGIN / COMMIT は D1 が受け付けないので
+    書かない"""
     out.mkdir(parents=True, exist_ok=True)
-    files: list[Path] = []
+    n = 0
     f = None
     for s in statements:
-        if f is None or f.tell() > BYTES_PER_FILE:
-            if f:
-                f.close()
-            files.append(out / f"{len(files):03}.sql")
-            f = files[-1].open("w")
+        if f is not None and f.tell() > BYTES_PER_FILE:
+            f.close()
+            yield Path(f.name)
+            f = None
+        if f is None:
+            f = (out / f"{n:03}.sql").open("w", encoding="utf-8")
+            n += 1
         f.write(s + ";\n")
-    if f:
+    if f is not None:
         f.close()
-    return files
+        yield Path(f.name)
+
+
+def next_schema(tag: str) -> list[str]:
+    """全件を入れる表 (company_next など) と meta を作る文。SCHEMA の表の名前に _next を付け、索引の名前には tag を
+    付ける (入れ替えた後も今の表の索引と名前が重ならないように)"""
+    out = []
+    for s in SCHEMA + INDEXES:
+        if s.startswith("CREATE TABLE meta "):
+            out.append(s.replace("CREATE TABLE meta ", "CREATE TABLE IF NOT EXISTS meta "))
+            continue
+        for t in DATA_TABLES:
+            s = s.replace(f"CREATE TABLE {t} ", f"CREATE TABLE {t}_next ").replace(f" ON {t} (", f" ON {t}_next (")
+        out.append(s.replace("CREATE INDEX company_core ", f"CREATE INDEX company_core_{tag} "))
+    return out
 
 
 def full(con: duckdb.DuckDBPyConnection, new: str) -> Iterator[str]:
-    """テーブルを作り直して全件を入れる文。索引は行を入れた後に作る"""
-    yield from (f"DROP TABLE IF EXISTS {t}" for t in TABLES)
-    yield from SCHEMA
+    """全件を company_next などの表に入れる文。今の表には触らない。索引は行を入れた後に作る"""
+    yield from (f"DROP TABLE IF EXISTS {t}_next" for t in DATA_TABLES)
+    tables, indexes = [], []
+    for s in next_schema(uuid.uuid4().hex[:8]):
+        (indexes if s.startswith("CREATE INDEX") else tables).append(s)
+    yield from tables
     for table in ROWS:
-        cur = con.cursor().execute(rows_of(con, table, new) + f" ORDER BY {', '.join(KEYS[table])}")
-        while rows := cur.fetchmany(ROWS_PER_STATEMENT):
-            yield f"INSERT INTO {table} VALUES {values(rows)}"
-    yield from INDEXES
+        yield from insert(f"{table}_next", stream(con, rows_of(con, table, new) + f" ORDER BY {', '.join(KEYS[table])}"))
+    yield from indexes
+
+
+def swap() -> list[str]:
+    """全件を入れた表を今の表と入れ替える文"""
+    return [s for t in DATA_TABLES for s in (f"DROP TABLE IF EXISTS {t}", f"ALTER TABLE {t}_next RENAME TO {t}")]
 
 
 def prepare_diff(con: duckdb.DuckDBPyConnection, old: str, new: str) -> None:
-    """old と new を比べ、消す行・書く行を手元の表 (diff.*) に作る。前のバージョンの表を読むのはここ"""
+    """old と new を比べ、消す行・書く行を手元の表 (diff.*) に作る。前のバージョンの表を読むのはここ。
+    old と new はそれぞれ 1 回だけ読む (両方の行を合わせて、片方にしか無い行を残す)"""
     con.execute("CREATE SCHEMA IF NOT EXISTS memory.diff")
     for table in ["company", "posting"]:
         o, n = rows_of(con, table, old), rows_of(con, table, new)
-        con.execute(f"CREATE OR REPLACE TABLE memory.diff.add_{table} AS {n} EXCEPT {o}")
-        con.execute(f"CREATE OR REPLACE TABLE memory.diff.del_{table} AS {o} EXCEPT {n}")
+        con.execute(f"""
+            CREATE OR REPLACE TABLE memory.diff.cmp_{table} AS
+            SELECT * EXCLUDE (in_old, in_new), max(in_old) AS in_old, max(in_new) AS in_new
+            FROM (SELECT *, 1 AS in_old, 0 AS in_new FROM ({o}) UNION ALL SELECT *, 0, 1 FROM ({n}))
+            GROUP BY ALL HAVING max(in_old) <> max(in_new)""")
+        for name, side in [("add", "in_new"), ("del", "in_old")]:
+            con.execute(f"""CREATE OR REPLACE TABLE memory.diff.{name}_{table} AS
+                SELECT * EXCLUDE (in_old, in_new) FROM memory.diff.cmp_{table} WHERE {side} = 1""")
+        con.execute(f"DROP TABLE memory.diff.cmp_{table}")
     # 置き換える法人 (add_company) は主キーで上書きするので、消すのは new に無い法人だけ
     con.execute(
         "DELETE FROM memory.diff.del_company WHERE corporate_number IN (SELECT corporate_number FROM memory.diff.add_company)"
@@ -208,12 +253,8 @@ def diff(con: duckdb.DuckDBPyConnection, new: str) -> Iterator[str]:
         yield from insert("posting", take("add_posting", c), "INSERT OR IGNORE")
     # df と IDF は法人の数で変わるので、gram は全部を書き直す。city も小さいので全部
     for table in ["gram", "city"]:
-        gone = stream(con, f"SELECT * FROM memory.diff.del_{table}")
-        while b := [r for _, r in zip(range(ROWS_PER_STATEMENT), gone)]:
-            yield from delete(table, b)
-        rows = stream(con, rows_of(con, table, new) + f" ORDER BY {KEYS[table][0]}")
-        while b := [r for _, r in zip(range(ROWS_PER_STATEMENT), rows)]:
-            yield from insert(table, b, "INSERT OR REPLACE")
+        yield from delete(table, stream(con, f"SELECT * FROM memory.diff.del_{table}"))
+        yield from insert(table, stream(con, rows_of(con, table, new) + f" ORDER BY {KEYS[table][0]}"), "INSERT OR REPLACE")
 
 
 class D1:
@@ -233,6 +274,10 @@ class D1:
     def run_file(self, path: Path) -> None:
         self._wrangler("--file", str(path))
 
+    def atomic(self, statements: list[str]) -> None:
+        """1 回の要求にまとめて流す。D1 は要求を 1 件ずつ順に処理するので、途中にほかの問い合わせが割り込まない"""
+        self._wrangler("--command", ";\n".join(statements))
+
 
 class SQLite:
     """D1 の代わりに手元の SQLite ファイルに流す"""
@@ -247,8 +292,11 @@ class SQLite:
         return rows
 
     def run_file(self, path: Path) -> None:
-        self.db.executescript(path.read_text())
+        self.db.executescript(path.read_text(encoding="utf-8"))
         self.db.commit()
+
+    def atomic(self, statements: list[str]) -> None:
+        self.db.executescript("BEGIN;\n" + ";\n".join(statements) + ";\nCOMMIT;")
 
 
 def applied_meta(target: D1 | SQLite) -> dict[str, str]:
@@ -258,17 +306,34 @@ def applied_meta(target: D1 | SQLite) -> dict[str, str]:
     return {r["key"]: r["value"] for r in target.query("SELECT key, value FROM meta")}
 
 
+def base_version(meta: dict[str, str], version: str, full: bool) -> tuple[str | None, str | None]:
+    """差分の元にするバージョン (D1 に反映済みのもの) と、差分で書けないときはその理由"""
+    if full:
+        return None, "--full が指定された"
+    if "version" not in meta:
+        return None, "D1 に反映済みのバージョンが無い"
+    if meta.get("schema") != SCHEMA_VERSION:
+        return None, "D1 のテーブルの定義が変わった"
+    # 前の回が別のバージョンへの反映の途中で止まっていたら、その分の行を消せない。applying が version と同じなら
+    # 前の回は meta を書き終えている
+    if meta.get("applying") not in (None, version, meta["version"]):
+        return None, f"前の回が {meta['applying']} への反映の途中で止まっている"
+    return meta["version"], None
+
+
 def attach(con: duckdb.DuckDBPyConnection, source: str, version: str, alias: str) -> None:
     con.execute(f"ATTACH 'ducklake:{source}versions/{version}/ducklake.duckdb' AS {alias} (READ_ONLY)")
 
 
-def verify(con: duckdb.DuckDBPyConnection, target: D1 | SQLite, new: str) -> None:
-    """法人数と posting の行数を元データと照合する"""
+def verify(con: duckdb.DuckDBPyConnection, target: D1 | SQLite, new: str, suffix: str = "") -> None:
+    """法人数と posting の行数を元データと照合する。suffix は照合する表の名前の末尾 (全件を入れた表は _next)"""
     want = (
         con.execute(f"SELECT count(*) FROM ({rows_of(con, 'company', new)})").fetchone()[0],
         con.execute(f"SELECT count(*) FROM {new}.forward.posting").fetchone()[0],
     )
-    got = target.query("SELECT (SELECT count(*) FROM company) AS company, (SELECT count(*) FROM posting) AS posting")[0]
+    got = target.query(
+        f"SELECT (SELECT count(*) FROM company{suffix}) AS company, (SELECT count(*) FROM posting{suffix}) AS posting"
+    )[0]
     print(f"company: {got['company']} / {want[0]}, posting: {got['posting']} / {want[1]}", flush=True)
     if (got["company"], got["posting"]) != want:
         sys.exit("D1 の行数が元データと合いません。--full で入れ直してください")
@@ -287,12 +352,11 @@ def main() -> None:
     req = urllib.request.Request(f"{args.source}refs/heads/main", headers={"User-Agent": "company-resolver-sync"})
     with urllib.request.urlopen(req) as res:
         version = res.read().decode().strip()
-    meta = {} if args.full else applied_meta(target)
-    applied = meta.get("version")
-    print(f"source: {version}, applied: {applied}, schema: {meta.get('schema')} -> {SCHEMA_VERSION}", flush=True)
-    if applied is not None and meta.get("schema") != SCHEMA_VERSION:
-        print("D1 のテーブルの定義が変わったので、全件を入れ直します", flush=True)
-        applied = None
+    meta = applied_meta(target)
+    print(f"source: {version}, meta: {meta}, schema: {SCHEMA_VERSION}", flush=True)
+    applied, reason = base_version(meta, version, args.full)
+    if reason:
+        print(f"{reason}ので、全件を入れ直します", flush=True)
     if applied == version:
         print("反映済みです")
         return
@@ -307,19 +371,37 @@ def main() -> None:
         except duckdb.Error as e:
             print(f"前のバージョン {applied} を読めないので、全件を入れ直します: {e}", flush=True)
             applied = None
-    statements = diff(con, "new") if applied is not None else full(con, "new")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        files = write_files(statements, Path(tmp))
-        for f in files:
-            print(f"{f.name}: {f.stat().st_size / 2**20:.1f} MB", flush=True)
-            target.run_file(f)
-    verify(con, target, "new")
-    # 最後に書く。途中で止まれば meta は前のままなので、次の回も同じ差分を流し直す
-    target.query(
-        f"INSERT OR REPLACE INTO meta VALUES ('schema', {literal(SCHEMA_VERSION)}), ('version', {literal(version)})"
-    )
+    def run(statements: Iterable[str]) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in write_files(statements, Path(tmp)):
+                print(f"{f.name}: {f.stat().st_size / 2**20:.1f} MB", flush=True)
+                target.run_file(f)
+                f.unlink()
+
+    # 最後に書く meta。途中で止まれば meta は前のままなので、次の回も同じ差分を流し直す
+    done = [
+        f"INSERT OR REPLACE INTO meta VALUES ('schema', {literal(SCHEMA_VERSION)}), ('version', {literal(version)})",
+        "DELETE FROM meta WHERE key = 'applying'",
+    ]
+    if applied is not None:
+        # 今の表を書き換え始める前に、どのバージョンへの反映かを残す
+        target.query(f"INSERT OR REPLACE INTO meta VALUES ('applying', {literal(version)})")
+        run(diff(con, "new"))
+        verify(con, target, "new")
+        target.atomic(done)
+    else:
+        run(full(con, "new"))
+        try:
+            verify(con, target, "new", "_next")
+        except SystemExit:
+            # 合わなかった表は使わないので消す (残すと D1 の大きさが 2 倍のまま)
+            target.atomic([f"DROP TABLE IF EXISTS {t}_next" for t in DATA_TABLES])
+            raise
+        # 表の入れ替えと meta を 1 回で流し、新旧の混ざった表を正引きに見せない
+        target.atomic(swap() + done)
     print(f"反映しました: {version}")
+
 
 if __name__ == "__main__":
     main()
