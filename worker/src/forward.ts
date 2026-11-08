@@ -159,47 +159,76 @@ const answerOf = (
   };
 };
 
-/**
- * 正引き。商号が同じ法人の検索と bigram の索引の検索を、D1 への 1 回の往復 (batch) で行う。
- * 商号と法人格 (と住所の市区町村) が一致する法人が 1 件だけなら、それで答える (matched)。
- * それ以外は bigram の索引で見つけた近い商号を候補に並べる
- */
-export const forward = async (sql: Sql, cities: readonly City[], input: Input): Promise<Answer> => {
+/** 1 件の問い合わせを、正規化した商号と住所の市区町村にしたもの */
+type Query = {
+  input: Input;
+  name: string;
+  lf: string | null;
+  core: string;
+  cityCodes: ReadonlySet<string>;
+  legalOk: (p: Row) => boolean;
+  cityOk: (p: Row) => boolean;
+};
+
+const queryOf = (input: Input, cities: readonly City[]): Query => {
   const name = nfkc(input.name);
   const lf = legalForm(name);
-  const core = coreName(name);
-  const inCity = input.address ? citiesIn(nfkc(input.address), cities) : [];
-  const cityCodes = new Set(inCity.map((c) => c.lg_code));
-  const legalOk = (p: Row) => lf === null || lf === p.legal_form;
-  const cityOk = (p: Row) => cityCodes.has(p.lg_code);
+  const cityCodes = new Set(
+    (input.address ? citiesIn(nfkc(input.address), cities) : []).map((c) => c.lg_code),
+  );
+  return {
+    input,
+    name,
+    lf,
+    core: coreName(name),
+    cityCodes,
+    legalOk: (p) => lf === null || lf === p.legal_form,
+    cityOk: (p) => cityCodes.has(p.lg_code),
+  };
+};
 
-  const [exact, fuzzy] = (await sql([
-    { sql: EXACT, params: [core] },
-    { sql: FUZZY, params: [JSON.stringify(bigrams(core)), JSON.stringify([...cityCodes]), core] },
-  ])) as [Row[], Scored[]];
+/**
+ * 商号が同じ法人で答えが決まれば、その応答。商号と法人格 (住所の市区町村が分かれば市区町村も) が一致する
+ * 法人が 1 件だけなら matched。決まらなければ null
+ */
+const answerByExact = (q: Query, cities: readonly City[], exact: readonly Row[]): Answer | null => {
   // 住所の市区町村が分かるときは、市区町村まで一致して初めて商号の一致とみなす
-  const same = exact.filter((p) => legalOk(p) && (cityCodes.size === 0 || cityOk(p)));
-  if (same.length === 1) {
-    // 商号が同じで法人格や市区町村が違う法人も、後ろの候補に並べる
-    const ranked = exact
-      .map((p) => ({ p, ed: 0, cityOk: cityOk(p) }))
-      .sort(
-        (a, b) =>
-          Number(b.cityOk) - Number(a.cityOk) ||
-          Number(legalOk(b.p)) - Number(legalOk(a.p)) ||
-          a.p.corporate_number.localeCompare(b.p.corporate_number),
-      );
-    return answerOf({ ...input, name, lf }, cities, cityCodes, "matched", 1, ranked);
-  }
+  const same = exact.filter((p) => q.legalOk(p) && (q.cityCodes.size === 0 || q.cityOk(p)));
+  if (same.length !== 1) return null;
+  // 商号が同じで法人格や市区町村が違う法人も、後ろの候補に並べる
+  const ranked = exact
+    .map((p) => ({ p, ed: 0, cityOk: q.cityOk(p) }))
+    .sort(
+      (a, b) =>
+        Number(b.cityOk) - Number(a.cityOk) ||
+        Number(q.legalOk(b.p)) - Number(q.legalOk(a.p)) ||
+        a.p.corporate_number.localeCompare(b.p.corporate_number),
+    );
+  return answerOf(
+    { ...q.input, name: q.name, lf: q.lf },
+    cities,
+    q.cityCodes,
+    "matched",
+    1,
+    ranked,
+  );
+};
 
+/** bigram の索引で見つけた近い商号を候補に並べた応答 */
+const answerByFuzzy = (
+  q: Query,
+  cities: readonly City[],
+  exact: readonly Row[],
+  fuzzy: readonly Scored[],
+): Answer => {
   const picked = [
     ...topByScore(
       fuzzy.filter((r) => r.part === "national"),
-      core,
+      q.core,
     ),
     ...topByScore(
       fuzzy.filter((r) => r.part === "local"),
-      core,
+      q.core,
     ),
   ];
   const best = new Map<string, { r: Scored; ed: number }>();
@@ -208,7 +237,7 @@ export const forward = async (sql: Sql, cities: readonly City[], input: Input): 
       best.set(x.r.corporate_number, x);
   }
   const ranked = [...best.values()]
-    .map(({ r, ed }) => ({ p: r, score: r.score, ed, cityOk: cityOk(r), legal: legalOk(r) }))
+    .map(({ r, ed }) => ({ p: r, score: r.score, ed, cityOk: q.cityOk(r), legal: q.legalOk(r) }))
     .sort(
       (a, b) =>
         a.ed + (a.cityOk ? 0 : 2) - (b.ed + (b.cityOk ? 0 : 2)) ||
@@ -218,10 +247,55 @@ export const forward = async (sql: Sql, cities: readonly City[], input: Input): 
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
   const top = ranked[0];
-  // 商号が同じ法人が 1 件なら上で答えているので、ここで商号が一致するのは同じ条件の法人が複数あるとき
+  // 商号が同じ法人が 1 件なら answerByExact で答えているので、ここで商号が一致するのは同じ条件の法人が複数あるとき
   const isExact =
-    top !== undefined && top.ed === 0 && top.legal && (cityCodes.size === 0 || top.cityOk);
+    top !== undefined && top.ed === 0 && top.legal && (q.cityCodes.size === 0 || top.cityOk);
   const status: Status = isExact ? "ambiguous" : ranked.length > 0 ? "candidates" : "not_found";
+  const same = exact.filter((p) => q.legalOk(p) && (q.cityCodes.size === 0 || q.cityOk(p)));
   const sameCount = fuzzy.length > 0 || exact.length > 0 ? same.length : null;
-  return answerOf({ ...input, name, lf }, cities, cityCodes, status, sameCount, ranked);
+  return answerOf(
+    { ...q.input, name: q.name, lf: q.lf },
+    cities,
+    q.cityCodes,
+    status,
+    sameCount,
+    ranked,
+  );
 };
+
+/**
+ * 正引き。まず商号が同じ法人を引き (1 回目の往復)、それで答えが決まらない問い合わせだけ bigram の索引で
+ * 近い商号を検索する (2 回目の往復)。複数の問い合わせは、それぞれの往復を 1 回の batch にまとめる。
+ * 応答は inputs と同じ順
+ */
+export const forwardMany = async (
+  sql: Sql,
+  cities: readonly City[],
+  inputs: readonly Input[],
+): Promise<Answer[]> => {
+  const queries = inputs.map((input) => queryOf(input, cities));
+  const exact = (await sql(queries.map((q) => ({ sql: EXACT, params: [q.core] })))) as Row[][];
+  const answers = queries.map((q, i) => answerByExact(q, cities, exact[i]));
+  const rest = queries.flatMap((q, i) => (answers[i] === null ? [i] : []));
+  const fuzzy = new Map<number, Scored[]>();
+  if (rest.length > 0) {
+    const rows = (await sql(
+      rest.map((i) => ({
+        sql: FUZZY,
+        params: [
+          JSON.stringify(bigrams(queries[i].core)),
+          JSON.stringify([...queries[i].cityCodes]),
+          queries[i].core,
+        ],
+      })),
+    )) as Scored[][];
+    rest.forEach((i, k) => fuzzy.set(i, rows[k]));
+  }
+  return queries.map(
+    (q, i) => answers[i] ?? answerByFuzzy(q, cities, exact[i], fuzzy.get(i) ?? []),
+  );
+};
+
+/** 1 件の正引き */
+export const forward = async (sql: Sql, cities: readonly City[], input: Input): Promise<Answer> =>
+  (await forwardMany(sql, cities, [input]))[0];
