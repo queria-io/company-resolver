@@ -15,18 +15,21 @@ for (const origin of process.argv.slice(2)) {
     const url = `${origin}/v1/forward?${new URLSearchParams({ name: q.name, address: q.address })}`;
     const ms = [];
     let headers;
+    const errors = new Set();
     for (let i = 0; i < 6; i++) {
       const t0 = performance.now();
       const res = await fetch(url);
       await res.arrayBuffer();
       ms.push(performance.now() - t0);
       headers = res.headers;
+      if (res.status !== 200) errors.add(res.status);
     }
     const m = median(ms.slice(1));
     all.push(m);
     const info = ["x-d1-rows-read", "x-r2-reads"]
       .filter((h) => headers.get(h) !== null)
       .map((h) => `${h}=${headers.get(h)}`)
+      .concat([...errors].map((s) => `status=${s}`))
       .join(" ");
     console.log(`${origin}\t${q.name}\t${Math.round(m)} ms\t${info}`);
   }

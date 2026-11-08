@@ -22,7 +22,7 @@ uv run python worker/bench/make-queries.py edinet.parquet /tmp/cr/queries
 cd worker && pnpm tsx bench/run.ts /tmp/cr/index.sqlite /tmp/cr/queries/clean.jsonl
 ```
 
-## 結果（2026-11-08、正引きの索引を D1 に置いた後）
+## 結果（2026-11-08）
 
 | 入力 | 上位 1 件 | 上位 5 件 | matched | matched のうち正解 |
 |---|---|---|---|---|
@@ -40,11 +40,16 @@ cd worker && pnpm tsx bench/run.ts /tmp/cr/index.sqlite /tmp/cr/queries/clean.js
 
 値は中央値 / 90 パーセンタイル / 99 パーセンタイル。Node.js から手元の SQLite に、Worker と同じ 2 つの文を流したときのもので、D1 との往復の時間を含まない。
 
-### D1 に置いた Worker の応答時間
+### D1 に置いた Worker の応答時間と読んだ行数
 
-D1（APAC）に同じ索引を入れ、workers.dev にデプロイした Worker へ、日本から 10 件を各 6 回問い合わせた（2026-11-08、`bench/latency.mjs`。D1 から返す候補の数を 300 件にしていたとき）。2〜6 回目の中央値は 111〜223 ms（10 件の中央値 163 ms）で、そのうち D1 の中の実行時間は 19〜104 ms。同じ問い合わせを、R2 の Parquet を読む前の Worker に流すと 271〜1,111 ms（中央値 526 ms）で、R2 の読み込み回数（8〜55 回）にほぼ比例していた。
+D1（APAC）に索引を入れ、workers.dev にデプロイした Worker へ、日本から 10 件（`bench/latency-queries.jsonl`）を各 6 回問い合わせた（2026-11-09、`bench/latency.mjs`）。
 
-1 件の問い合わせで D1 が読む行数は、bigram の索引を引く文が平均 29,467 行、商号が同じ法人を引く文が 1 行未満（63 回の平均、D1 の集計）。
+| | 最小 | 中央値 | 最大 |
+|---|---|---|---|
+| 応答時間（2〜6 回目の中央値） | 131 ms | 158 ms | 198 ms |
+| D1 が読んだ行数（`X-D1-Rows-Read`） | 5,904 行 | 19,156 行 | 62,541 行 |
+
+読んだ行数の平均は 26,407 行。ほとんどは `posting` の走査で、全国で読む bigram の出現数の合計（上限 10,000）と、住所の市区町村の中の行の数で決まる。
 
 ## 照合の規則
 
