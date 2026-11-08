@@ -1,4 +1,4 @@
-// 商号の正規化。prototype/normalize.sql と同じ規則にする (索引はその SQL で作るため)
+// 商号の正規化。dbt のマクロ (macros/normalize.sql) と同じ規則にする (索引はそのマクロで作るため)
 
 const LEGAL_FORMS = [
   ["株式会社", "(株)"],

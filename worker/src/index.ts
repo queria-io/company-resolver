@@ -5,11 +5,12 @@ import { cors } from "hono/cors";
 import { type ReadLog } from "./parquet";
 import { forward } from "./forward";
 import { isCorporateNumber, reverse } from "./reverse";
+import { loadIndex } from "./source";
 
 export type Env = {
   DATA: R2Bucket;
-  /** 索引の置き場 (R2 のプレフィックス) */
-  INDEX_PREFIX: string;
+  /** 索引の置き場。FDL のリポジトリ (「…/」) か目録 (「….json」)。src/source.ts */
+  DATA_SOURCE: string;
   /** IP ごとの回数の上限。テストでは無い */
   LIMITER?: RateLimit;
 };
@@ -42,7 +43,7 @@ app.get("/v1/forward", async (c) => {
   const log: ReadLog = { reads: 0, bytes: 0 };
   const answer = await forward(
     c.env.DATA,
-    c.env.INDEX_PREFIX,
+    await loadIndex(c.env.DATA, c.env.DATA_SOURCE),
     { name, address: c.req.query("address")?.trim() || undefined, limit },
     log,
   );
@@ -58,7 +59,8 @@ app.get("/v1/reverse", async (c) => {
     return c.json({ error: "corporate_number に 13 桁の法人番号を渡してください" }, 400);
   }
   const log: ReadLog = { reads: 0, bytes: 0 };
-  const company = await reverse(c.env.DATA, c.env.INDEX_PREFIX, corporateNumber, log);
+  const index = await loadIndex(c.env.DATA, c.env.DATA_SOURCE);
+  const company = await reverse(c.env.DATA, index, corporateNumber, log);
   c.header("X-R2-Reads", String(log.reads));
   c.header("X-R2-Bytes", String(log.bytes));
   return company ? c.json(company) : c.json({ error: "法人番号が見つかりません" }, 404);

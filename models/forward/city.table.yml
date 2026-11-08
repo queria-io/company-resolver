@@ -1,0 +1,17 @@
+schema: forward
+name: city
+title: 市区町村
+description: |-
+  本店所在地に現れる市区町村の lg_code と名前です。照合で住所から市区町村を切り出すのに使います。
+keywords:
+  - 法人番号
+sources:
+  - path: https://www.houjin-bangou.nta.go.jp/
+fields:
+  - name: lg_code
+    title: 全国地方公共団体コード
+    description: "6 桁（検査数字あり）"
+  - name: prefecture_name
+    title: 都道府県名
+  - name: city_name
+    title: 市区町村名

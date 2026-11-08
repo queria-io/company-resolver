@@ -9,8 +9,9 @@
   "routes": [{ "pattern": "company-resolver.queria.io", "custom_domain": true }],
   "r2_buckets": [{ "binding": "DATA", "bucket_name": "queria" }],
   "vars": {
-    // 索引の置き場 (export_parquet.py の出力を置いたプレフィックス)
-    "INDEX_PREFIX": "company-resolver/",
+    // 索引の置き場。Queria の company_resolver データセット (FDL のリポジトリ) のプレフィックス。
+    // refs/heads/main が指すバージョンを読む (src/source.ts)
+    "DATA_SOURCE": "",
   },
   // IP ごとの回数の上限 (src/index.ts)。費用を守るためのもので、ふつうの使い方では当たらない高さ
   "ratelimits": [

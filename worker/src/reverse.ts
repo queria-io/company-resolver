@@ -1,5 +1,6 @@
-// 法人番号から法人を返す。索引の形は prototype/export_company.py
+// 法人番号から法人を返す。索引は models/reverse/company.sql の dbt のモデル
 import { columnStats, openFile, readGroups, type ReadLog } from "./parquet";
+import { type Index, shardFiles } from "./source";
 
 type Day = Date | string | null;
 
@@ -105,20 +106,20 @@ const toCompany = ({
 
 export const reverse = async (
   bucket: R2Bucket,
-  prefix: string,
+  index: Index,
   corporateNumber: string,
   log: ReadLog = { reads: 0, bytes: 0 },
 ): Promise<Company | null> => {
-  const file = await openFile(
-    bucket,
-    `${prefix}company/shard=${corporateNumber.slice(-3)}.parquet`,
-    log,
+  const rows = await Promise.all(
+    shardFiles(index, "reverse.company", corporateNumber.slice(-3)).map(async (ref) => {
+      const file = await openFile(bucket, ref, log);
+      if (!file) return [];
+      const groups = columnStats(file.metadata, "corporate_number").flatMap((s, i) =>
+        s.min <= corporateNumber && corporateNumber <= s.max ? [i] : [],
+      );
+      return readGroups<Row>(file, groups, COLUMNS);
+    }),
   );
-  if (!file) return null;
-  const groups = columnStats(file.metadata, "corporate_number").flatMap((s, i) =>
-    s.min <= corporateNumber && corporateNumber <= s.max ? [i] : [],
-  );
-  const rows = await readGroups<Row>(file, groups, COLUMNS);
-  const row = rows.find((r) => r.corporate_number === corporateNumber);
+  const row = rows.flat().find((r) => r.corporate_number === corporateNumber);
   return row ? toCompany(row) : null;
 };

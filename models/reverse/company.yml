@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: company
+    description: |
+      法人ごとの最新の状態です。登記記録が閉鎖した法人も含み、旧商号と旧所在地を持ちます。
+      「国税庁法人番号公表サイト」（国税庁）（https://www.houjin-bangou.nta.go.jp/）を加工して作成。
+    access: public
+    columns:
+      - name: shard
+        data_type: varchar
+      - name: corporate_number
+        data_type: varchar
+      - name: name
+        data_type: varchar
+      - name: furigana
+        data_type: varchar
+      - name: kind
+        data_type: varchar
+      - name: prefecture_name
+        data_type: varchar
+      - name: city_name
+        data_type: varchar
+      - name: street_number
+        data_type: varchar
+      - name: lg_code
+        data_type: varchar
+      - name: assignment_date
+        data_type: date
+      - name: close_date
+        data_type: date
+      - name: close_cause
+        data_type: varchar
+      - name: successor_corporate_number
+        data_type: varchar
+      - name: former_names
+        data_type: struct(name varchar, until date)[]
+      - name: former_addresses
+        data_type: struct(prefecture varchar, city varchar, street_number varchar, lg_code varchar, until date)[]

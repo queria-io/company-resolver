@@ -1,4 +1,4 @@
-// 企業名と住所から法人番号の候補を返す。規則は DESIGN.md、索引の形は prototype/export_parquet.py
+// 企業名と住所から法人番号の候補を返す。規則は DESIGN.md、索引は models/forward/ の dbt のモデル
 import {
   bigrams,
   compareCodePoints,
@@ -16,8 +16,9 @@ import {
   readWhole,
   type ReadLog,
 } from "./parquet";
+import { type Index, shardFiles, type Table } from "./source";
 
-/** 索引のファイルの数 (export_parquet.py の SHARDS) */
+/** bigram のファイルの番号の数 (macros/normalize.sql の gram_shard) */
 const SHARDS = 1024;
 /** 1 件の検索で引く bigram の数。出現する法人が少ない順に取る */
 const RAREST_GRAMS = 8;
@@ -129,7 +130,7 @@ const groupsFor = (file: ParquetFile, g: string, cityCodes?: ReadonlySet<string>
 
 export const forward = async (
   bucket: R2Bucket,
-  prefix: string,
+  index: Index,
   input: Input,
   log: ReadLog = { reads: 0, bytes: 0 },
 ): Promise<Answer> => {
@@ -138,20 +139,26 @@ export const forward = async (
   const core = coreName(name);
   const grams = bigrams(core);
   const shards = [...new Set(grams.map((g) => shardOf(g, SHARDS)))];
-  const key = (dir: string, k: number) =>
-    `${prefix}${dir}/shard=${String(k).padStart(4, "0")}.parquet`;
+  const filesOf = (table: Table, k: number) => shardFiles(index, table, String(k));
 
   // 1 回目: bigram の df、索引のフッター、市区町村の一覧を同時に読む。
-  // 番号のファイルが無いのは、その番号の bigram を持つ法人が無いとき (export_parquet.py)
+  // 番号のファイルが無いのは、その番号の bigram を持つ法人が無いとき
   const [gramRows, files, cityRows] = await Promise.all([
-    Promise.all(shards.map((k) => readWhole<Gram>(bucket, key("gram", k), log))),
     Promise.all(
-      shards.map(async (k) => [k, await openFile(bucket, key("posting", k), log)] as const),
+      shards.flatMap((k) =>
+        filesOf("forward.gram", k).map((f) => readWhole<Gram>(bucket, f.key, log)),
+      ),
     ),
-    readWhole<City>(bucket, `${prefix}city.parquet`, log),
+    Promise.all(
+      shards.flatMap((k) =>
+        filesOf("forward.posting", k).map(
+          async (f) => [k, await openFile(bucket, f, log)] as const,
+        ),
+      ),
+    ),
+    Promise.all(index.tables["forward.city"].map((f) => readWhole<City>(bucket, f.key, log))),
   ]);
-  if (!cityRows) throw new Error(`not found: ${prefix}city.parquet`);
-  const cities = cityRows;
+  const cities = cityRows.flatMap((r) => r ?? []);
   const wanted = new Set(grams);
   const chosen = gramRows
     .flatMap((r) => r ?? [])
@@ -170,7 +177,10 @@ export const forward = async (
   const idf = new Map(chosen.map((r) => [r.g, r.idf]));
   const inCity = input.address ? citiesIn(nfkc(input.address), cities) : [];
   const cityCodes = new Set(inCity.map((c) => c.lg_code));
-  const fileOf = new Map(files.flatMap(([k, f]) => (f ? [[k, f] as const] : [])));
+  const filesByShard = Map.groupBy(
+    files.flatMap(([k, f]) => (f ? [{ k, f }] : [])),
+    ({ k }) => k,
+  );
 
   // 2 回目: 全国で読む bigram は全部の行、残りは住所の市区町村の行だけを読む。
   // 同じファイルの bigram は行グループをまとめ、同じ行グループを 2 回読まない
@@ -178,26 +188,26 @@ export const forward = async (
   const byFile = Map.groupBy(reads, (r) => shardOf(r.g, SHARDS));
   const rows = (
     await Promise.all(
-      [...byFile].map(async ([k, gs]) => {
-        const file = fileOf.get(k);
-        if (!file) return [];
-        const groups = [
-          ...new Set(gs.flatMap((r) => groupsFor(file, r.g, r.full ? undefined : cityCodes))),
-        ].sort((a, b) => a - b);
-        const got = await readGroups<Posting>(file, groups, [
-          "g",
-          "lg_code",
-          "corporate_number",
-          "legal_form",
-          "core",
-          "name",
-        ]);
-        const want = new Map(gs.map((r) => [r.g, r.full]));
-        return got.filter((p) => {
-          const full = want.get(p.g);
-          return full !== undefined && (full || cityCodes.has(p.lg_code));
-        });
-      }),
+      [...byFile].flatMap(([k, gs]) =>
+        (filesByShard.get(k) ?? []).map(async ({ f: file }) => {
+          const groups = [
+            ...new Set(gs.flatMap((r) => groupsFor(file, r.g, r.full ? undefined : cityCodes))),
+          ].sort((a, b) => a - b);
+          const got = await readGroups<Posting>(file, groups, [
+            "g",
+            "lg_code",
+            "corporate_number",
+            "legal_form",
+            "core",
+            "name",
+          ]);
+          const want = new Map(gs.map((r) => [r.g, r.full]));
+          return got.filter((p) => {
+            const full = want.get(p.g);
+            return full !== undefined && (full || cityCodes.has(p.lg_code));
+          });
+        }),
+      ),
     )
   ).flat();
 

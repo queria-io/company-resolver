@@ -8,7 +8,7 @@ import type { Answer } from "../src/forward";
 
 beforeAll(async () => {
   await Promise.all(
-    Object.entries(fixtures).map(([path, data]) => env.DATA.put(env.INDEX_PREFIX + path, data)),
+    Object.entries(fixtures).map(([path, data]) => env.DATA.put(`fixture/${path}`, data)),
   );
 });
 

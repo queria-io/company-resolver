@@ -1,0 +1,21 @@
+schema: forward
+name: gram
+title: bigram の出現数
+description: |-
+  bigram ごとの、その bigram を商号に含む法人の数と IDF です。照合で珍しい bigram から読むのに使います。
+keywords:
+  - 法人番号
+sources:
+  - path: https://www.houjin-bangou.nta.go.jp/
+fields:
+  - name: shard
+    title: ファイルの番号
+    description: "posting と同じ"
+  - name: g
+    title: bigram
+  - name: df
+    title: 法人の数
+    description: "その bigram を商号に含む法人の数"
+  - name: idf
+    title: IDF
+    description: "ln(法人の総数 / df)"

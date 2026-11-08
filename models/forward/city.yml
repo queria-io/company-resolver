@@ -1,0 +1,15 @@
+version: 2
+
+models:
+  - name: city
+    description: |
+      本店所在地に現れる市区町村の lg_code と名前です。照合で住所から市区町村を切り出すのに使います。
+      「国税庁法人番号公表サイト」（国税庁）（https://www.houjin-bangou.nta.go.jp/）を加工して作成。
+    access: public
+    columns:
+      - name: lg_code
+        data_type: varchar
+      - name: prefecture_name
+        data_type: varchar
+      - name: city_name
+        data_type: varchar

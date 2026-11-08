@@ -1,0 +1,23 @@
+schema: forward
+name: company_name
+title: 法人の商号（正規化済み）
+description: |-
+  現存する法人の商号を NFKC で正規化したものと、本店所在地の市区町村です。正引きの索引の元になります。
+keywords:
+  - 法人番号
+sources:
+  - path: https://www.houjin-bangou.nta.go.jp/
+fields:
+  - name: corporate_number
+    title: 法人番号
+    description: "13 桁"
+  - name: name
+    title: 商号
+    description: "NFKC で正規化した商号"
+  - name: prefecture_name
+    title: 都道府県名
+  - name: city_name
+    title: 市区町村名
+  - name: lg_code
+    title: 全国地方公共団体コード
+    description: "6 桁（検査数字あり）"

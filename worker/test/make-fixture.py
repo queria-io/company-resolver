@@ -1,22 +1,26 @@
 """テスト用の小さな索引を test/fixture/ に作る。
 
-usage (prototype/ の仮想環境で): python test/make-fixture.py
+usage (リポジトリの直下で): uv run python worker/test/make-fixture.py
+
+本番と同じ dbt のモデルを、法人番号のデータセットの代わりに手元のカタログ (下の架空の法人) に向けて流す。
+書いたファイルの一覧を test/fixture/manifest.json に書く (Worker は目録から読む。bench/manifest.py)。
 法人は架空のもの。並びと規則を試すために、同じ商号を別の市区町村に置いている
 """
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import date
 from pathlib import Path
 
-import pyarrow as pa
-import pyarrow.parquet as pq
+import duckdb
 
-HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE.parent.parent / "prototype"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
+from manifest import write_manifest  # noqa: E402
 
-from build_index import build  # noqa: E402
-from export_company import export as export_company  # noqa: E402
-from export_parquet import export  # noqa: E402
+ROOT = Path(__file__).resolve().parents[2]
+FIXTURE = Path(__file__).resolve().parent / "fixture"
 
 COMPANIES = [
     ("1000000000001", "株式会社クエリア", "東京都", "千代田区", "131016"),
@@ -28,46 +32,55 @@ COMPANIES = [
     ("1000000000007", "株式会社テスト工業", "東京都", "中央区", "131024"),
     ("1000000000008", "テスト工業株式会社", "大阪府", "大阪市北区", "271276"),
 ]
+FIRST = date(2015, 10, 5)
+# 履歴。1000000000001 は所在地を 2 回変えた法人、1000000000009 は商号を変えたあと合併で閉鎖した法人
+HISTORY = [
+    (c[0], 1, c[0] != "1000000000001", FIRST, c[1], c[2], c[3], c[4], None, None, None) for c in COMPANIES
+] + [
+    ("1000000000001", 2, False, date(2020, 4, 1), "株式会社クエリア", "東京都", "中央区", "131024", None, None, None),
+    ("1000000000001", 3, True, date(2022, 4, 1), "株式会社クエリア", "東京都", "千代田区", "131016", None, None, None),
+    ("1000000000009", 1, False, FIRST, "クエリア工業株式会社", "東京都", "千代田区", "131016", None, None, None),
+    ("1000000000009", 2, True, date(2023, 1, 1), "旧クエリア株式会社", "東京都", "千代田区", "131016",
+     date(2023, 1, 1), "11", "1000000000001"),
+]
 
 
-# 逆引きの履歴 (mart_houjin_bangou_history の列のうち export_company.py が読むもの)。
-# 1000000000001 は商号と所在地を 1 回ずつ変えた法人、1000000000009 は商号を変えたあと合併で閉鎖した法人
-HISTORY_COLUMNS = ["corporate_number", "history_seq", "is_latest", "change_date", "name", "furigana", "kind",
-                   "prefecture_name", "city_name", "street_number", "lg_code", "assignment_date", "close_date",
-                   "close_cause", "successor_corporate_number"]
-
-
-def history_rows() -> list[tuple]:
-    first = date(2015, 10, 5)
-    rows = [(c[0], 1, c[0] != "1000000000001", first, c[1], None, "301", c[2], c[3], "1-1", c[4], first, None, None,
-             None) for c in COMPANIES]
-    return rows + [
-        ("1000000000001", 2, False, date(2020, 4, 1), "株式会社クエリア", None, "301", "東京都", "中央区", "2-2",
-         "131024", first, None, None, None),
-        ("1000000000001", 3, True, date(2022, 4, 1), "株式会社クエリア", None, "301", "東京都", "千代田区", "1-1",
-         "131016", first, None, None, None),
-        ("1000000000009", 1, False, first, "クエリア工業株式会社", None, "301", "東京都", "千代田区", "1-1", "131016",
-         first, None, None, None),
-        ("1000000000009", 2, True, date(2023, 1, 1), "旧クエリア株式会社", None, "301", "東京都", "千代田区", "1-1",
-         "131016", first, date(2023, 1, 1), "11", "1000000000001"),
-    ]
+def source(path: Path) -> None:
+    """法人番号のデータセットと同じ名前・列のテーブルを、手元の DuckLake に作る"""
+    con = duckdb.connect()
+    con.execute(f"ATTACH 'ducklake:{path}/catalog.sqlite' AS h (DATA_PATH '{path}/data/', DATA_INLINING_ROW_LIMIT 0)")
+    con.execute("""
+        CREATE TABLE h.mart_houjin_bangou (corporate_number VARCHAR, name VARCHAR, furigana VARCHAR, kind VARCHAR,
+            prefecture_name VARCHAR, city_name VARCHAR, street_number VARCHAR, lg_code VARCHAR, assignment_date DATE)
+    """)
+    con.executemany("INSERT INTO h.mart_houjin_bangou VALUES (?, ?, NULL, '301', ?, ?, '1-1', ?, ?)",
+                    [(*c, FIRST) for c in COMPANIES])
+    con.execute("""
+        CREATE TABLE h.mart_houjin_bangou_history (corporate_number VARCHAR, history_seq BIGINT, is_latest BOOLEAN,
+            change_date DATE, name VARCHAR, furigana VARCHAR, kind VARCHAR, prefecture_name VARCHAR, city_name VARCHAR,
+            street_number VARCHAR, lg_code VARCHAR, assignment_date DATE, close_date DATE, close_cause VARCHAR,
+            successor_corporate_number VARCHAR)
+    """)
+    con.executemany("""
+        INSERT INTO h.mart_houjin_bangou_history
+        VALUES (?, ?, ?, ?, ?, NULL, '301', ?, ?, CASE WHEN ? = '131024' THEN '2-2' ELSE '1-1' END, ?, ?, ?, ?, ?)
+    """, [(*r[:7], r[7], r[7], FIRST, *r[8:]) for r in HISTORY])
 
 
 def main() -> None:
-    cols = list(zip(*COMPANIES))
-    table = pa.table({
-        "corporate_number": cols[0], "name": cols[1], "furigana": [None] * len(COMPANIES),
-        "kind": ["301"] * len(COMPANIES), "prefecture_name": cols[2], "city_name": cols[3],
-        "street_number": ["1-1"] * len(COMPANIES), "lg_code": cols[4],
-    })
     with tempfile.TemporaryDirectory() as tmp:
-        pq.write_table(table, f"{tmp}/houjin.parquet")
-        build(f"{tmp}/houjin.parquet", tmp)
-        export(tmp, str(HERE / "fixture"))
-        history = pa.Table.from_pylist([dict(zip(HISTORY_COLUMNS, r)) for r in history_rows()])
-        pq.write_table(history, f"{tmp}/history.parquet")
-        export_company(f"{tmp}/history.parquet", str(HERE / "fixture"))
-
+        tmp = Path(tmp)
+        (tmp / "houjin").mkdir()
+        source(tmp / "houjin")
+        shutil.rmtree(FIXTURE, ignore_errors=True)
+        env = {
+            **os.environ,
+            "HOUJIN_BANGOU": f"ducklake:{tmp}/houjin/catalog.sqlite",
+            "FDL_WORKING": str(tmp / "work.sqlite"),
+            "FDL_DATA_PATH": f"{FIXTURE}/",
+        }
+        subprocess.run(["dbt", "run", "--quiet"], cwd=ROOT, env=env, check=True)
+        write_manifest(str(tmp / "work.sqlite"), str(FIXTURE))
 
 if __name__ == "__main__":
     main()
