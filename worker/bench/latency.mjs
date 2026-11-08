@@ -1,6 +1,6 @@
 // 正引きの応答時間を、手元から API ごとに計測する。各問い合わせを 6 回流し、2 回目以降の中央値を出す
-// usage: node bench/d1/latency.mjs <API の起点> [<API の起点> ...]
-//   例: node bench/d1/latency.mjs https://company-resolver.queria.io https://company-resolver-d1-test.flops.workers.dev
+// usage: node bench/latency.mjs <API の起点> [<API の起点> ...]
+//   例: node bench/latency.mjs https://company-resolver.queria.io
 import { readFileSync } from "node:fs";
 
 const queries = readFileSync(new URL("latency-queries.jsonl", import.meta.url), "utf8")
@@ -24,7 +24,7 @@ for (const origin of process.argv.slice(2)) {
     }
     const m = median(ms.slice(1));
     all.push(m);
-    const info = ["x-r2-reads", "x-wall-ms", "x-d1-ms"]
+    const info = ["x-d1-rows-read", "x-r2-reads"]
       .filter((h) => headers.get(h) !== null)
       .map((h) => `${h}=${headers.get(h)}`)
       .join(" ");

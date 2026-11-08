@@ -1,19 +1,13 @@
-// 索引のファイルの置き場を引く。Worker が知るのは置き場 (DATA_SOURCE) だけにする。
+// 逆引きの索引のファイルの置き場を引く (正引きの索引は D1)。Worker が知るのは置き場 (DATA_SOURCE) だけにする。
 //   - 「…/」: FDL のリポジトリ (Queria の company_resolver データセット)。refs/heads/main が指すバージョンの
 //     files.json (テーブルごとのファイル一覧) から引く。毎月の Sync で main が進めば、デプロイなしで読む先が切り替わる
-//   - 「….json」: 目録。{ "version": "…", "tables": { "forward.posting": ["forward/posting/shard=1/a.parquet"], … } }。
+//   - 「….json」: 目録。{ "version": "…", "tables": { "reverse.company": ["reverse/company/shard=001/a.parquet"], … } }。
 //     パスは目録からの相対。テストと、セルフホストで自分の Parquet を読ませるときに使う
 
 import type { Store } from "./store";
 
-/** Worker が読むテーブル (スキーマ.テーブル)。dbt のモデル (models/) と同じ名前 */
-export const TABLES = [
-  "forward.posting",
-  "forward.gram",
-  "forward.exact_name",
-  "forward.city",
-  "reverse.company",
-] as const;
+/** Worker が R2 から読むテーブル (スキーマ.テーブル)。dbt のモデル (models/) と同じ名前 */
+export const TABLES = ["reverse.company"] as const;
 export type Table = (typeof TABLES)[number];
 
 /** R2 のキーと、分かればファイルの大きさとフッターの長さ */

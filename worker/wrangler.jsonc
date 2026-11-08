@@ -7,9 +7,18 @@
   // company-resolver.queria.io で出す。workers.dev は計測用に残す
   "workers_dev": true,
   "routes": [{ "pattern": "company-resolver.queria.io", "custom_domain": true }],
+  // 正引きの索引。scripts/sync_d1.py が models/forward/ の表を入れる
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "company-resolver",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+    },
+  ],
+  // 逆引きの索引 (Parquet) の置き場
   "r2_buckets": [{ "binding": "DATA", "bucket_name": "queria" }],
   "vars": {
-    // 索引の置き場。Queria の company_resolver データセット (FDL のリポジトリ) のプレフィックス。
+    // 逆引きの索引の置き場。Queria の company_resolver データセット (FDL のリポジトリ) のプレフィックス。
     // refs/heads/main が指すバージョンを読む (src/source.ts)
     "DATA_SOURCE": "903e9c75-6563-45c6-a3dd-0accc63e4d45/",
   },

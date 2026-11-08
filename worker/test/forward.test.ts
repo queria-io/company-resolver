@@ -6,10 +6,13 @@ import fixtures from "virtual:index-fixture";
 import app from "../src/index";
 import type { Answer } from "../src/forward";
 
+// 正引きの索引: scripts/sync_d1.py が全件を入れるときと同じ文 (test/make-fixture.py) を D1 に流す
 beforeAll(async () => {
-  await Promise.all(
-    Object.entries(fixtures).map(([path, data]) => env.DATA.put(`fixture/${path}`, data)),
-  );
+  const statements = new TextDecoder()
+    .decode(fixtures["forward.sql"])
+    .split(";\n")
+    .filter((s) => s.trim() !== "");
+  await env.DB.batch(statements.map((s) => env.DB.prepare(s)));
 });
 
 const forward = async (query: Record<string, string>): Promise<Answer> => {
@@ -92,12 +95,12 @@ describe("/v1/forward", () => {
     expect(res.status).toBe(400);
   });
 
-  it("商号の表で 1 件に決まれば、商号の表と市区町村の一覧の 2 つだけを読んで答える", async () => {
+  it("D1 から読んだ行数をヘッダーで返す", async () => {
     const res = await app.request(
-      `/v1/forward?${new URLSearchParams({ name: "株式会社クエリア", address: "東京都千代田区紀尾井町1-3" })}`,
+      `/v1/forward?${new URLSearchParams({ name: "株式会社クエリア" })}`,
       {},
       env,
     );
-    expect(res.headers.get("X-R2-Reads")).toBe("2");
+    expect(Number(res.headers.get("X-D1-Rows-Read"))).toBeGreaterThan(0);
   });
 });

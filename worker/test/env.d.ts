@@ -1,6 +1,7 @@
 // cloudflare:test の型に、この Worker のバインディングを与える
 declare namespace Cloudflare {
   interface Env {
+    DB: D1Database;
     DATA: R2Bucket;
     DATA_SOURCE: string;
   }

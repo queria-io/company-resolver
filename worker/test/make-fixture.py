@@ -3,9 +3,11 @@
 usage (リポジトリの直下で): uv run python worker/test/make-fixture.py
 
 本番と同じ dbt のモデルを、法人番号のデータセットの代わりに手元のカタログ (下の架空の法人) に向けて流す。
-書いたファイルの一覧を test/fixture/manifest.json に書く (Worker は目録から読む。bench/manifest.py)。
+- 逆引き: Parquet と、そのファイルの一覧 test/fixture/manifest.json (Worker は目録から読む。src/source.ts)
+- 正引き: D1 に流す SQL test/fixture/forward.sql (scripts/sync_d1.py で全件を入れるときと同じ文)
 法人は架空のもの。並びと規則を試すために、同じ商号を別の市区町村に置いている
 """
+import json
 import os
 import shutil
 import subprocess
@@ -16,10 +18,10 @@ from pathlib import Path
 
 import duckdb
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
-from manifest import write_manifest  # noqa: E402
-
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+from sync_d1 import full, write_files  # noqa: E402
+
 FIXTURE = Path(__file__).resolve().parent / "fixture"
 
 COMPANIES = [
@@ -80,7 +82,23 @@ def main() -> None:
             "FDL_DATA_PATH": f"{FIXTURE}/",
         }
         subprocess.run(["dbt", "run", "--quiet"], cwd=ROOT, env=env, check=True)
-        write_manifest(str(tmp / "work.sqlite"), str(FIXTURE))
+        con = duckdb.connect()
+        con.execute(f"ATTACH 'ducklake:sqlite:{tmp}/work.sqlite' AS c (READ_ONLY)")
+        write_manifest(con)
+        sql = write_files(full(con, "c"), tmp / "sql")
+        (FIXTURE / "forward.sql").write_text("".join(f.read_text() for f in sql))
+        shutil.rmtree(FIXTURE / "forward")
+
+
+def write_manifest(con: duckdb.DuckDBPyConnection) -> None:
+    """逆引きの表のファイルの一覧 (FIXTURE からの相対パス) を書く"""
+    files = con.execute(
+        "SELECT data_file FROM ducklake_list_files('c', 'company', schema => 'reverse')"
+    ).fetchall()
+    paths = sorted(Path(f).resolve().relative_to(FIXTURE.resolve()).as_posix() for (f,) in files)
+    manifest = {"version": "local", "tables": {"reverse.company": paths}}
+    (FIXTURE / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
 
 if __name__ == "__main__":
     main()

@@ -1,5 +1,4 @@
--- 商号の bigram ごとの法人。Worker は bigram の番号 (shard) のファイルを開き、
--- 行グループの g と lg_code の最小・最大で読む行グループを選ぶので、この順に並べる
+-- 商号の bigram ごとの法人。scripts/sync_d1.py が D1 の posting と company に入れる
 WITH company AS (
     SELECT corporate_number, name, lg_code,
         {{ legal_form('name') }} AS legal_form,

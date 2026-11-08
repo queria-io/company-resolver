@@ -1,55 +1,16 @@
 {
   "version": "local",
   "tables": {
-    "forward.exact_name": [
-      "forward/exact_name__dbt_tmp/shard=1423/ducklake-01a1ba85-48aa-7099-8981-7aad5cf777d6.parquet",
-      "forward/exact_name__dbt_tmp/shard=1716/ducklake-01a1ba85-48aa-740d-af10-a02974b16cf4.parquet",
-      "forward/exact_name__dbt_tmp/shard=2457/ducklake-01a1ba85-48ab-73ea-b410-0c902ae686fc.parquet",
-      "forward/exact_name__dbt_tmp/shard=739/ducklake-01a1ba85-48aa-7c15-b867-691261fa9b0a.parquet"
-    ],
-    "forward.posting": [
-      "forward/posting__dbt_tmp/shard=343/ducklake-01a1ba85-495a-7d41-adc3-7add5989d7fd.parquet",
-      "forward/posting__dbt_tmp/shard=370/ducklake-01a1ba85-495a-7d84-ae58-9e97c1a99382.parquet",
-      "forward/posting__dbt_tmp/shard=383/ducklake-01a1ba85-495a-7aa4-bdf9-fb36386b9158.parquet",
-      "forward/posting__dbt_tmp/shard=385/ducklake-01a1ba85-495b-7d4b-b347-0940879412d9.parquet",
-      "forward/posting__dbt_tmp/shard=396/ducklake-01a1ba85-495b-70df-9534-0d765b224627.parquet",
-      "forward/posting__dbt_tmp/shard=401/ducklake-01a1ba85-495b-7474-bb69-2351b30596d4.parquet",
-      "forward/posting__dbt_tmp/shard=402/ducklake-01a1ba85-495b-7548-9d9f-41c028480002.parquet",
-      "forward/posting__dbt_tmp/shard=418/ducklake-01a1ba85-495b-77cd-aa71-34a055026270.parquet",
-      "forward/posting__dbt_tmp/shard=451/ducklake-01a1ba85-495b-7838-a2fa-bc2802fb8bad.parquet",
-      "forward/posting__dbt_tmp/shard=462/ducklake-01a1ba85-495c-73a5-b5b8-60502dd346dd.parquet",
-      "forward/posting__dbt_tmp/shard=488/ducklake-01a1ba85-495c-7a6f-98a7-3bd28a1f1050.parquet",
-      "forward/posting__dbt_tmp/shard=685/ducklake-01a1ba85-495c-76f3-bafd-1d4d0270d82f.parquet",
-      "forward/posting__dbt_tmp/shard=850/ducklake-01a1ba85-495c-7ad7-92c7-674564f0ab18.parquet",
-      "forward/posting__dbt_tmp/shard=977/ducklake-01a1ba85-495c-7459-affe-47afc24ee497.parquet"
-    ],
-    "forward.gram": [
-      "forward/gram__dbt_tmp/shard=343/ducklake-01a1ba85-4a2e-7759-92fb-c9aaaa5ff8b6.parquet",
-      "forward/gram__dbt_tmp/shard=370/ducklake-01a1ba85-4a2e-7450-b933-c1bfd8da259c.parquet",
-      "forward/gram__dbt_tmp/shard=383/ducklake-01a1ba85-4a2f-7cb2-9566-d634ea9900fe.parquet",
-      "forward/gram__dbt_tmp/shard=385/ducklake-01a1ba85-4a2f-77c4-a5ac-a860eed42c8b.parquet",
-      "forward/gram__dbt_tmp/shard=396/ducklake-01a1ba85-4a2f-7839-8750-eeef5ccfeac5.parquet",
-      "forward/gram__dbt_tmp/shard=401/ducklake-01a1ba85-4a2f-7ecf-8b86-a7931240bc0e.parquet",
-      "forward/gram__dbt_tmp/shard=402/ducklake-01a1ba85-4a2f-7da5-9606-0c030c9eb545.parquet",
-      "forward/gram__dbt_tmp/shard=418/ducklake-01a1ba85-4a2f-7bfb-bd27-ca5fc487bda6.parquet",
-      "forward/gram__dbt_tmp/shard=451/ducklake-01a1ba85-4a30-79e9-becf-d3b0067b4d68.parquet",
-      "forward/gram__dbt_tmp/shard=462/ducklake-01a1ba85-4a30-7e35-916a-3c491e87f8aa.parquet",
-      "forward/gram__dbt_tmp/shard=488/ducklake-01a1ba85-4a30-7004-b245-86a129960ce4.parquet",
-      "forward/gram__dbt_tmp/shard=685/ducklake-01a1ba85-4a30-7e17-a28b-a1948d917204.parquet",
-      "forward/gram__dbt_tmp/shard=850/ducklake-01a1ba85-4a30-7df7-b4bd-17c9c945f8ab.parquet",
-      "forward/gram__dbt_tmp/shard=977/ducklake-01a1ba85-4a30-7012-ba7e-813392366b40.parquet"
-    ],
-    "forward.city": ["forward/city__dbt_tmp/ducklake-01a1ba85-47f4-7619-8765-401216ab8345.parquet"],
     "reverse.company": [
-      "reverse/company__dbt_tmp/shard=001/ducklake-01a1ba85-457b-7358-9e57-4d8195fb5a6f.parquet",
-      "reverse/company__dbt_tmp/shard=002/ducklake-01a1ba85-457c-7b09-be68-0b132d37f95f.parquet",
-      "reverse/company__dbt_tmp/shard=003/ducklake-01a1ba85-457c-7f3c-9988-6180c77abd8d.parquet",
-      "reverse/company__dbt_tmp/shard=004/ducklake-01a1ba85-457c-704b-b1ee-aaeeb84e0a29.parquet",
-      "reverse/company__dbt_tmp/shard=005/ducklake-01a1ba85-457c-79fd-8b51-9e8eb8798544.parquet",
-      "reverse/company__dbt_tmp/shard=006/ducklake-01a1ba85-457d-7bc5-a46a-c3847bba1b91.parquet",
-      "reverse/company__dbt_tmp/shard=007/ducklake-01a1ba85-457d-73cc-a70e-1ffddc17d5f4.parquet",
-      "reverse/company__dbt_tmp/shard=008/ducklake-01a1ba85-457d-7436-96c6-3ec93e7053c3.parquet",
-      "reverse/company__dbt_tmp/shard=009/ducklake-01a1ba85-457d-79d4-b789-f82aba72c632.parquet"
+      "reverse/company__dbt_tmp/shard=001/ducklake-01a1bac3-2422-74c9-8a15-2983a7c9bbfd.parquet",
+      "reverse/company__dbt_tmp/shard=002/ducklake-01a1bac3-2422-7e5f-9564-bd33b513564c.parquet",
+      "reverse/company__dbt_tmp/shard=003/ducklake-01a1bac3-2423-7b57-90c7-5896ab170dca.parquet",
+      "reverse/company__dbt_tmp/shard=004/ducklake-01a1bac3-2423-7705-a570-6628dd5058e4.parquet",
+      "reverse/company__dbt_tmp/shard=005/ducklake-01a1bac3-2423-7245-9c07-290fc6200ee1.parquet",
+      "reverse/company__dbt_tmp/shard=006/ducklake-01a1bac3-2423-7cde-8392-f6f510cd2bd4.parquet",
+      "reverse/company__dbt_tmp/shard=007/ducklake-01a1bac3-2423-7fe4-866d-1fca8769a193.parquet",
+      "reverse/company__dbt_tmp/shard=008/ducklake-01a1bac3-2423-7c25-b822-db1aabaf0693.parquet",
+      "reverse/company__dbt_tmp/shard=009/ducklake-01a1bac3-2423-7975-af36-0269cee5d2c6.parquet"
     ]
   }
 }

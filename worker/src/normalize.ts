@@ -38,10 +38,6 @@ export const bigrams = (core: string): string[] => {
   return [...new Set(chars.slice(1).map((c, i) => chars[i] + c))];
 };
 
-/** 索引のファイル番号。bigram の文字のコードポイントの和を shards で割った余り */
-export const shardOf = (gram: string, shards: number): number =>
-  Array.from(gram).reduce((sum, c) => sum + (c.codePointAt(0) ?? 0), 0) % shards;
-
 /** 文字単位の編集距離 */
 export const levenshtein = (a: string, b: string): number => {
   const x = Array.from(a);
@@ -55,16 +51,4 @@ export const levenshtein = (a: string, b: string): number => {
     prev = row;
   }
   return prev[y.length];
-};
-
-/** コードポイント順の比較。Parquet の文字列の統計 (UTF-8 のバイト順) と同じ順になる */
-export const compareCodePoints = (a: string, b: string): number => {
-  const x = Array.from(a);
-  const y = Array.from(b);
-  const n = Math.min(x.length, y.length);
-  for (let i = 0; i < n; i++) {
-    const d = (x[i].codePointAt(0) ?? 0) - (y[i].codePointAt(0) ?? 0);
-    if (d !== 0) return d;
-  }
-  return x.length - y.length;
 };

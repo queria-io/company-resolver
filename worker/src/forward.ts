@@ -1,38 +1,17 @@
-// 企業名と住所から法人番号の候補を返す。規則は DESIGN.md、索引は models/forward/ の dbt のモデル
-import {
-  bigrams,
-  compareCodePoints,
-  coreName,
-  legalForm,
-  levenshtein,
-  nfkc,
-  shardOf,
-} from "./normalize";
-import {
-  columnStats,
-  openFile,
-  type ParquetFile,
-  readGroups,
-  readWhole,
-  type ReadLog,
-} from "./parquet";
-import { type Index, shardFiles, type Table } from "./source";
-import type { Store } from "./store";
+// 企業名と住所から法人番号の候補を返す。規則は DESIGN.md、索引は D1 (scripts/sync_d1.py が models/forward/ から入れる)
+import { bigrams, coreName, legalForm, levenshtein, nfkc } from "./normalize";
 
-/** bigram のファイルの番号の数 (macros/normalize.sql の gram_shard) */
-const SHARDS = 1024;
-/** 商号が同じ法人の表 (forward.exact_name) のファイルの数 (macros/normalize.sql の name_shard) */
-const NAME_SHARDS = 4096;
 /** 1 件の検索で引く bigram の数。出現する法人が少ない順に取る */
 const RAREST_GRAMS = 8;
+/** 全国で引く行の上限。出現する法人が少ない bigram から順に、合計がこれに収まるものだけを全国で引く */
+const NATIONAL_ROWS = 10_000;
 /** 編集距離で比べる候補の数 (全国と、住所の市区町村の中から、それぞれ) */
 const COMPARE_TOP = 100;
-/** 全国から読む行の上限。出現する法人が少ない bigram から順に、合計がこれに収まるものだけを全国で読む */
-const NATIONAL_READ_ROWS = 10_000;
+/** D1 から返す候補の数 (全国と市区町村の中から、それぞれ)。SQLite では編集距離を計算できないので多めに返す */
+const FETCH_TOP = 1000;
 
 export type Input = { name: string; address?: string; limit?: number };
 
-type Gram = { g: string; df: number; idf: number };
 export type City = { lg_code: string; prefecture_name: string; city_name: string };
 export type Row = {
   lg_code: string;
@@ -41,7 +20,6 @@ export type Row = {
   core: string;
   name: string;
 };
-type Posting = Row & { g: string };
 
 export type Evidence = {
   name: string;
@@ -67,6 +45,9 @@ export type Answer = {
   candidates: Candidate[];
 };
 
+/** 文をまとめて 1 往復で流し、文ごとの行を返す (Worker では D1 の batch、ベンチマークでは手元の SQLite) */
+export type Sql = (statements: { sql: string; params: unknown[] }[]) => Promise<unknown[][]>;
+
 const PREFECTURE_PREFIX = /^(東京都|北海道|京都府|大阪府|.{2,3}県)/;
 
 /**
@@ -85,56 +66,72 @@ export const citiesIn = (address: string, cities: readonly City[]): City[] => {
   return hits.filter((c) => c.city_name.length === longest);
 };
 
-/**
- * IDF の合計の上位 COMPARE_TOP 件。合計が同じなら、商号の編集距離の小さい順
- * (全国で読む bigram が少なく同じ合計の法人が多いとき、入力に近い商号を落とさないため)
- */
-const topByScore = (
-  rows: readonly Posting[],
-  idf: ReadonlyMap<string, number>,
-  core: string,
-): Map<string, number> => {
-  const scores = rows.reduce(
-    (acc, r) =>
-      acc.set(r.corporate_number, (acc.get(r.corporate_number) ?? 0) + (idf.get(r.g) ?? 0)),
-    new Map<string, number>(),
-  );
-  // 法人ごとに 1 回だけ計算する (rows には同じ法人が bigram の数だけある)
-  const distance = new Map<string, number>();
-  for (const r of rows) {
-    if (!distance.has(r.corporate_number))
-      distance.set(r.corporate_number, levenshtein(core, r.core));
-  }
-  return new Map(
-    [...scores]
-      .sort(
-        ([a, x], [b, y]) =>
-          y - x || (distance.get(a) ?? 0) - (distance.get(b) ?? 0) || a.localeCompare(b),
-      )
-      .slice(0, COMPARE_TOP),
-  );
+const CITIES = "SELECT lg_code, prefecture_name, city_name FROM city";
+
+/** 市区町村の一覧を覚えておく時間。毎月の反映のあと、遅くともこれだけたてば新しい一覧を使う */
+const CITY_TTL_MS = 5 * 60 * 1000;
+let cachedCities: { at: number; cities: Promise<City[]> } | null = null;
+
+/** 市区町村の一覧 (約 1,900 行)。問い合わせのたびに D1 から読まないよう、CITY_TTL_MS のあいだ覚えておく */
+export const loadCities = (sql: Sql, now = Date.now()): Promise<City[]> => {
+  if (cachedCities && now - cachedCities.at < CITY_TTL_MS) return cachedCities.cities;
+  const cities = sql([{ sql: CITIES, params: [] }]).then(([rows]) => rows as City[]);
+  const entry = { at: now, cities };
+  cachedCities = entry;
+  // 失敗したら覚えない (次の問い合わせで読み直す)
+  cities.catch(() => {
+    if (cachedCities === entry) cachedCities = null;
+  });
+  return cities;
 };
 
-/**
- * 読む行グループ: bigram g の行が入りうるもの。cityCodes を渡すと、その市区町村の行が入りうるものだけ。
- * 統計の最小・最大はコードポイント順なので、UTF-16 の順になる演算子 (<=) では比べない
- */
-const groupsFor = (file: ParquetFile, g: string, cityCodes?: ReadonlySet<string>): number[] => {
-  const gs = columnStats(file.metadata, "g");
-  const ls = columnStats(file.metadata, "lg_code");
-  return gs.flatMap((s, i) =>
-    compareCodePoints(s.min, g) <= 0 &&
-    compareCodePoints(g, s.max) <= 0 &&
-    (cityCodes === undefined || [...cityCodes].some((c) => ls[i].min <= c && c <= ls[i].max))
-      ? [i]
-      : [],
-  );
-};
+const EXACT =
+  "SELECT corporate_number, core, legal_form, lg_code, name FROM company WHERE core = ?1";
+
+// 出現する法人が少ない bigram RAREST_GRAMS 個を引き、最も珍しいものと、合計 NATIONAL_ROWS 行に収まるものは
+// 全国、すべての bigram は住所の市区町村の中で、IDF の合計の上位を取る。合計が同じなら商号の長さの差の
+// 小さい順に FETCH_TOP 件を返し、編集距離で COMPARE_TOP 件に絞るのは Worker
+const FUZZY = `
+WITH chosen AS (
+  SELECT g, idf, row_number() OVER w AS rn, sum(df) OVER w AS cum
+  FROM gram WHERE g IN (SELECT value FROM json_each(?1))
+  WINDOW w AS (ORDER BY df, g) ORDER BY df, g LIMIT ${RAREST_GRAMS}
+),
+national AS (
+  SELECT p.corporate_number, sum(c.idf) AS score FROM chosen c JOIN posting p ON p.g = c.g
+  WHERE c.rn = 1 OR c.cum <= ${NATIONAL_ROWS} GROUP BY 1
+),
+local AS (
+  SELECT p.corporate_number, sum(c.idf) AS score FROM chosen c JOIN posting p ON p.g = c.g
+  WHERE p.lg_code IN (SELECT value FROM json_each(?2)) GROUP BY 1
+)
+SELECT * FROM (
+  SELECT 'national' AS part, s.score, co.* FROM national s JOIN company co USING (corporate_number)
+  ORDER BY s.score DESC, abs(length(co.core) - length(?3)) LIMIT ${FETCH_TOP})
+UNION ALL
+SELECT * FROM (
+  SELECT 'local' AS part, s.score, co.* FROM local s JOIN company co USING (corporate_number)
+  ORDER BY s.score DESC, abs(length(co.core) - length(?3)) LIMIT ${FETCH_TOP})`;
+
+type Scored = Row & { part: "national" | "local"; score: number };
 
 export type Ranked = { p: Row; ed: number; cityOk: boolean };
 
+/** IDF の合計の上位 COMPARE_TOP 件。合計が同じなら商号の編集距離の小さい順 */
+const topByScore = (rows: readonly Scored[], core: string): Scored[] =>
+  rows
+    .map((r) => ({ r, ed: levenshtein(core, r.core) }))
+    .sort(
+      (a, b) =>
+        b.r.score - a.r.score ||
+        a.ed - b.ed ||
+        a.r.corporate_number.localeCompare(b.r.corporate_number),
+    )
+    .slice(0, COMPARE_TOP)
+    .map(({ r }) => r);
+
 /** 照合の結果を応答の形にする */
-export const answerOf = (
+const answerOf = (
   input: Input,
   cities: readonly City[],
   cityCodes: ReadonlySet<string>,
@@ -164,158 +161,60 @@ export const answerOf = (
 };
 
 /**
- * 正引き。まず正規化した商号が同じ法人の表 (forward.exact_name、商号の番号ごとのファイルを丸ごと読む) を引き、
+ * 正引き。商号が同じ法人の検索と bigram の索引の検索を、D1 への 1 回の往復 (batch) で行う。
  * 商号と法人格 (と住所の市区町村) が一致する法人が 1 件だけなら、それで答える (matched)。
- * それ以外は bigram の索引で近い商号を検索する (同じ条件の法人が複数あるときも、近い商号を候補に並べるため)
+ * それ以外は bigram の索引で見つけた近い商号を候補に並べる
  */
-export const forward = async (
-  bucket: Store,
-  index: Index,
-  input: Input,
-  log: ReadLog = { reads: 0, bytes: 0 },
-): Promise<Answer> => {
+export const forward = async (sql: Sql, cities: readonly City[], input: Input): Promise<Answer> => {
   const name = nfkc(input.name);
   const lf = legalForm(name);
   const core = coreName(name);
-  // 1 回目: 商号が同じ法人と、市区町村の一覧を同時に読む
-  const [nameRows, cityRows] = await Promise.all([
-    Promise.all(
-      shardFiles(index, "forward.exact_name", String(shardOf(core, NAME_SHARDS))).map((f) =>
-        readWhole<Row>(bucket, f.key, log),
-      ),
-    ),
-    Promise.all(index.tables["forward.city"].map((f) => readWhole<City>(bucket, f.key, log))),
-  ]);
-  const cities = cityRows.flatMap((r) => r ?? []);
   const inCity = input.address ? citiesIn(nfkc(input.address), cities) : [];
   const cityCodes = new Set(inCity.map((c) => c.lg_code));
   const legalOk = (p: Row) => lf === null || lf === p.legal_form;
   const cityOk = (p: Row) => cityCodes.has(p.lg_code);
-  const same = nameRows.flatMap((r) => r ?? []).filter((p) => core !== "" && p.core === core);
+
+  const [exact, fuzzy] = (await sql([
+    { sql: EXACT, params: [core] },
+    { sql: FUZZY, params: [JSON.stringify(bigrams(core)), JSON.stringify([...cityCodes]), core] },
+  ])) as [Row[], Scored[]];
   // 住所の市区町村が分かるときは、市区町村まで一致して初めて商号の一致とみなす
-  const hits = same.filter((p) => legalOk(p) && (cityCodes.size === 0 || cityOk(p)));
-  if (hits.length !== 1) return fuzzy(bucket, index, input, cities, cityCodes, log);
-  const ranked = same
-    .map((p) => ({ p, ed: 0, cityOk: cityOk(p) }))
-    .sort(
-      (a, b) =>
-        Number(b.cityOk) - Number(a.cityOk) ||
-        Number(legalOk(b.p)) - Number(legalOk(a.p)) ||
-        a.p.corporate_number.localeCompare(b.p.corporate_number),
-    );
-  return answerOf(input, cities, cityCodes, "matched", 1, ranked);
-};
+  const same = exact.filter((p) => legalOk(p) && (cityCodes.size === 0 || cityOk(p)));
+  if (same.length === 1) {
+    // 商号が同じで法人格や市区町村が違う法人も、後ろの候補に並べる
+    const ranked = exact
+      .map((p) => ({ p, ed: 0, cityOk: cityOk(p) }))
+      .sort(
+        (a, b) =>
+          Number(b.cityOk) - Number(a.cityOk) ||
+          Number(legalOk(b.p)) - Number(legalOk(a.p)) ||
+          a.p.corporate_number.localeCompare(b.p.corporate_number),
+      );
+    return answerOf(input, cities, cityCodes, "matched", 1, ranked);
+  }
 
-/** bigram の索引で、商号が近い法人を検索する */
-const fuzzy = async (
-  bucket: Store,
-  index: Index,
-  input: Input,
-  cities: readonly City[],
-  cityCodes: ReadonlySet<string>,
-  log: ReadLog,
-): Promise<Answer> => {
-  const name = nfkc(input.name);
-  const lf = legalForm(name);
-  const core = coreName(name);
-  const grams = bigrams(core);
-  const shards = [...new Set(grams.map((g) => shardOf(g, SHARDS)))];
-  const filesOf = (table: Table, k: number) => shardFiles(index, table, String(k));
-
-  // 2 回目: bigram の df と索引のフッターを同時に読む。
-  // 番号のファイルが無いのは、その番号の bigram を持つ法人が無いとき
-  const [gramRows, files] = await Promise.all([
-    Promise.all(
-      shards.flatMap((k) =>
-        filesOf("forward.gram", k).map((f) => readWhole<Gram>(bucket, f.key, log)),
-      ),
+  const picked = [
+    ...topByScore(
+      fuzzy.filter((r) => r.part === "national"),
+      core,
     ),
-    Promise.all(
-      shards.flatMap((k) =>
-        filesOf("forward.posting", k).map(
-          async (f) => [k, await openFile(bucket, f, log)] as const,
-        ),
-      ),
+    ...topByScore(
+      fuzzy.filter((r) => r.part === "local"),
+      core,
     ),
-  ]);
-  const wanted = new Set(grams);
-  const chosen = gramRows
-    .flatMap((r) => r ?? [])
-    .filter((r) => wanted.has(r.g))
-    .map((r) => ({ ...r, df: Number(r.df) }))
-    .sort((a, b) => a.df - b.df || (a.g < b.g ? -1 : 1))
-    .slice(0, RAREST_GRAMS)
-    .reduce<{ total: number; list: (Gram & { full: boolean })[] }>(
-      ({ total, list }, r) => ({
-        total: total + r.df,
-        // 最も珍しい bigram は必ず全国で読む (住所が無くても、同じ商号の法人をすべて引けるように)
-        list: [...list, { ...r, full: list.length === 0 || total + r.df <= NATIONAL_READ_ROWS }],
-      }),
-      { total: 0, list: [] },
-    ).list;
-  const idf = new Map(chosen.map((r) => [r.g, r.idf]));
-  const filesByShard = Map.groupBy(
-    files.flatMap(([k, f]) => (f ? [{ k, f }] : [])),
-    ({ k }) => k,
-  );
-
-  // 3 回目: 全国で読む bigram は全部の行、残りは住所の市区町村の行だけを読む。
-  // 同じファイルの bigram は行グループをまとめ、同じ行グループを 2 回読まない
-  const reads = chosen.filter((r) => r.full || cityCodes.size > 0);
-  const byFile = Map.groupBy(reads, (r) => shardOf(r.g, SHARDS));
-  const rows = (
-    await Promise.all(
-      [...byFile].flatMap(([k, gs]) =>
-        (filesByShard.get(k) ?? []).map(async ({ f: file }) => {
-          const groups = [
-            ...new Set(gs.flatMap((r) => groupsFor(file, r.g, r.full ? undefined : cityCodes))),
-          ].sort((a, b) => a - b);
-          const got = await readGroups<Posting>(file, groups, [
-            "g",
-            "lg_code",
-            "corporate_number",
-            "legal_form",
-            "core",
-            "name",
-          ]);
-          const want = new Map(gs.map((r) => [r.g, r.full]));
-          return got.filter((p) => {
-            const full = want.get(p.g);
-            return full !== undefined && (full || cityCodes.has(p.lg_code));
-          });
-        }),
-      ),
-    )
-  ).flat();
-
-  const fullGrams = new Set(chosen.filter((r) => r.full).map((r) => r.g));
-  const national = topByScore(
-    rows.filter((p) => fullGrams.has(p.g)),
-    idf,
-    core,
-  );
-  const local = topByScore(
-    rows.filter((p) => cityCodes.has(p.lg_code)),
-    idf,
-    core,
-  );
-  const scores = new Map(
-    [...national, ...local].map(([cn]) => [
-      cn,
-      Math.max(national.get(cn) ?? 0, local.get(cn) ?? 0),
-    ]),
-  );
-  const byNumber = new Map(rows.map((p) => [p.corporate_number, p]));
-  const legalOk = (p: Posting) => lf === null || lf === p.legal_form;
-
-  const ranked = [...scores]
-    .flatMap(([cn, score]) => {
-      const p = byNumber.get(cn);
-      if (!p) return [];
-      const ed = levenshtein(core, p.core);
-      const cityOk = cityCodes.has(p.lg_code);
-      return [{ p, score, ed, cityOk, legal: legalOk(p) }];
-    })
+  ];
+  const best = new Map<string, Scored>();
+  for (const r of picked) {
+    if ((best.get(r.corporate_number)?.score ?? -1) < r.score) best.set(r.corporate_number, r);
+  }
+  const ranked = [...best.values()]
+    .map((p) => ({
+      p,
+      score: p.score,
+      ed: levenshtein(core, p.core),
+      cityOk: cityOk(p),
+      legal: legalOk(p),
+    }))
     .sort(
       (a, b) =>
         a.ed + (a.cityOk ? 0 : 2) - (b.ed + (b.cityOk ? 0 : 2)) ||
@@ -324,27 +223,11 @@ const fuzzy = async (
         b.score - a.score ||
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
-
-  // 同じ商号の法人の数。商号が同じ法人はどの bigram も持つので、全国で読んだ最も珍しい bigram の行で数える
-  const rarest = chosen[0];
-  const sameName = (p: Posting) => p.g === rarest?.g && p.core === core && legalOk(p);
-  const sameCount =
-    rarest === undefined
-      ? null
-      : rows.filter((p) => sameName(p) && (cityCodes.size === 0 || cityCodes.has(p.lg_code)))
-          .length;
-
   const top = ranked[0];
-  // 住所の市区町村が分かるときは、市区町村まで一致して初めて商号の一致とみなす
-  const exact =
+  // 商号が同じ法人が 1 件なら上で答えているので、ここで商号が一致するのは同じ条件の法人が複数あるとき
+  const isExact =
     top !== undefined && top.ed === 0 && top.legal && (cityCodes.size === 0 || top.cityOk);
-  const status: Status = exact
-    ? sameCount === 1
-      ? "matched"
-      : "ambiguous"
-    : ranked.length > 0
-      ? "candidates"
-      : "not_found";
-
+  const status: Status = isExact ? "ambiguous" : ranked.length > 0 ? "candidates" : "not_found";
+  const sameCount = fuzzy.length > 0 || exact.length > 0 ? same.length : null;
   return answerOf(input, cities, cityCodes, status, sameCount, ranked);
 };
