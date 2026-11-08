@@ -5,7 +5,7 @@ import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 
 import { type ReadLog } from "./parquet";
-import { type AssetLog, assetFiles, rowReader } from "./assets";
+import { type AssetLog, assetFiles, loadVersion, rowReader } from "./assets";
 import { forward, forwardMany, type Input, loadCities } from "./forward";
 import { isCorporateNumber, reverse } from "./reverse";
 import { loadIndex } from "./source";
@@ -85,11 +85,17 @@ const inputOf = (name: unknown, address: unknown, limit: unknown): Input | strin
 /** 静的アセットの索引を読む口と、読んだファイルの数・量 */
 const assets = (fetcher: Fetcher) => {
   const log: AssetLog = { reads: 0, bytes: 0 };
-  return { read: rowReader(assetFiles(fetcher), log), log };
+  const files = assetFiles(fetcher);
+  return { read: rowReader(files, log), log, version: loadVersion(files) };
 };
 
-/** 読んだファイルの数と量 (計測用) */
-const assetHeaders = (c: Context<{ Bindings: Env }>, log: AssetLog) => {
+/** 索引のバージョンと、読んだファイルの数と量 (計測用) */
+const assetHeaders = async (
+  c: Context<{ Bindings: Env }>,
+  log: AssetLog,
+  version: Promise<string | null>,
+) => {
+  c.header("X-Data-Version", (await version) ?? "");
   c.header("X-Asset-Reads", String(log.reads));
   c.header("X-Asset-Bytes", String(log.bytes));
 };
@@ -97,9 +103,9 @@ const assetHeaders = (c: Context<{ Bindings: Env }>, log: AssetLog) => {
 app.get("/v1/forward", async (c) => {
   const input = inputOf(c.req.query("name"), c.req.query("address"), c.req.query("limit"));
   if (typeof input === "string") return c.json({ error: input }, 400);
-  const { read, log } = assets(c.env.ASSETS);
+  const { read, log, version } = assets(c.env.ASSETS);
   const answer = await forward(read, await loadCities(read), input);
-  assetHeaders(c, log);
+  await assetHeaders(c, log, version);
   return c.json(answer);
 });
 
@@ -130,9 +136,9 @@ const forwardBatch = async (c: Context<{ Bindings: Env }>, queries: unknown) => 
   if (c.env.BATCH_LIMITER && ip && !(await c.env.BATCH_LIMITER.limit({ key: ip })).success) {
     return c.json({ error: "呼び出しが多すぎます。少し待ってから呼んでください" }, 429);
   }
-  const { read, log } = assets(c.env.ASSETS);
+  const { read, log, version } = assets(c.env.ASSETS);
   const answers = await forwardMany(read, await loadCities(read), inputs);
-  assetHeaders(c, log);
+  await assetHeaders(c, log, version);
   return c.json({ results: answers.map((a, i) => ({ input: echoes[i], ...a })) });
 };
 

@@ -21,23 +21,38 @@ export const assetFiles =
   };
 
 /**
- * Parquet のファイルを丸ごと読んで行にする。同じ呼び出しの中で同じファイルを 2 回読まないよう、読んだものを覚える
- * (まとめて照合するときに、同じファイルを引く問い合わせが重なるため)
+ * Parquet のファイルを丸ごと読んで行にする。keep のファイルは、同じ呼び出しの中で 2 回読まないよう覚える
+ * (まとめて照合するときに、同じファイルを引く問い合わせが重なるため)。大きくなりうるファイル (bigram の索引) は
+ * 覚えずに読み捨て、呼び出しの中でメモリが積み上がらないようにする
  */
 export const rowReader = (files: Files, log: AssetLog) => {
-  const read = new Map<string, Promise<unknown[]>>();
-  return <T>(path: string): Promise<T[]> => {
-    let rows = read.get(path);
+  const kept = new Map<string, Promise<unknown[]>>();
+  const load = (path: string) =>
+    files(path).then(async (file) => {
+      if (!file) return [];
+      log.reads += 1;
+      log.bytes += file.byteLength;
+      return parquetReadObjects({ file, compressors });
+    });
+  return <T>(path: string, keep = true): Promise<T[]> => {
+    if (!keep) return load(path) as Promise<T[]>;
+    let rows = kept.get(path);
     if (!rows) {
-      rows = files(path).then(async (file) => {
-        if (!file) return [];
-        log.reads += 1;
-        log.bytes += file.byteLength;
-        return parquetReadObjects({ file, compressors });
-      });
-      read.set(path, rows);
+      rows = load(path);
+      kept.set(path, rows);
     }
     return rows as Promise<T[]>;
   };
 };
 export type RowReader = ReturnType<typeof rowReader>;
+
+let cachedVersion: Promise<string | null> | null = null;
+
+/** デプロイした索引のバージョン (scripts/build-data.mjs が data/version.json に書く)。isolate の中で 1 回だけ読む */
+export const loadVersion = (files: Files): Promise<string | null> => {
+  cachedVersion ??= files("data/version.json").then((b) =>
+    b ? (JSON.parse(new TextDecoder().decode(b)) as { version: string }).version : null,
+  );
+  cachedVersion.catch(() => (cachedVersion = null));
+  return cachedVersion;
+};

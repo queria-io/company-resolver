@@ -8,7 +8,7 @@
 GET /v1/forward?name=株式会社クエリア&address=東京都千代田区紀尾井町1-3&limit=5
 ```
 
-`name` と `address` は 200 文字まで。応答は `status`（`matched` / `ambiguous` / `candidates` / `not_found`）、`same_name_count`、`candidates`（法人番号・商号・都道府県・市区町村・`evidence`）。ヘッダーの `X-Asset-Reads`・`X-Asset-Bytes` は、その問い合わせで読んだ索引のファイルの数とバイト数。
+`name` と `address` は 200 文字まで。応答は `status`（`matched` / `ambiguous` / `candidates` / `not_found`）、`same_name_count`、`candidates`（法人番号・商号・都道府県・市区町村・`evidence`）。ヘッダーの `X-Data-Version` はデプロイした索引のバージョン（データセットのバージョンの ID）、`X-Asset-Reads`・`X-Asset-Bytes` はその問い合わせで読んだ索引のファイルの数とバイト数。
 
 複数の企業をまとめて照合するときは、1 回に 20 件までを `POST /v1/forward/batch` に渡す。応答の `results` は、`queries` と同じ順に、1 件ずつの正引きと同じ形の応答を並べたもの。IP ごとに 1 分 10 回まで（`BATCH_LIMITER`）。
 

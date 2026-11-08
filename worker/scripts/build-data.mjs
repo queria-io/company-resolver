@@ -124,7 +124,7 @@ await Promise.all(
     }
   }),
 );
-// Worker が応答のヘッダーで返すバージョン (src/assets.ts)
+// Worker が応答のヘッダー X-Data-Version で返すバージョン (src/assets.ts の loadVersion)
 await writeFile(
   join(out, "data", "version.json"),
   JSON.stringify({ version: source.version, created_at: source.createdAt }),

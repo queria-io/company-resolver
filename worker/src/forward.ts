@@ -6,6 +6,8 @@ import { bigrams, cityBucket, coreName, legalForm, levenshtein, nfkc, shardOf } 
 const RAREST_GRAMS = 8;
 /** 全国で読む行の上限。出現する法人が少ない bigram から順に、合計がこれに収まるものだけを全国で読む */
 const NATIONAL_ROWS = 10_000;
+/** まとめて照合するとき、同時に進める近い商号の検索の数 (読んだ行を持つメモリを抑える) */
+const FUZZY_CONCURRENCY = 1;
 /** 編集距離で比べる候補の数 (全国と、住所の市区町村の中から、それぞれ) */
 const COMPARE_TOP = 100;
 /** 索引のファイルの分け方。dbt_project.yml の vars と同じ値にする */
@@ -205,7 +207,10 @@ const answerByExact = (
   return answerOf(q, cityOf, "matched", 1, ranked);
 };
 
-/** 引く bigram: 出現する法人が少ない順に RAREST_GRAMS 個。最も珍しいものと、合計が NATIONAL_ROWS に収まるものは全国で読む */
+/**
+ * 引く bigram: 出現する法人が少ない順に RAREST_GRAMS 個。合計が NATIONAL_ROWS に収まるものは全国で読む。
+ * 共通の bigram (出現が NATIONAL_ROWS を超える) は全国では読まない (1 件で数十万行になり、Worker のメモリに収まらない)
+ */
 const chooseGrams = async (q: Query, read: RowReader): Promise<Chosen[]> => {
   const wanted = new Set(bigrams(q.core));
   const shards = [...new Set([...wanted].map(gramPath))];
@@ -216,16 +221,15 @@ const chooseGrams = async (q: Query, read: RowReader): Promise<Chosen[]> => {
     .map((r) => ({ g: r.g, df: Number(r.df), idf: r.idf, commonId: r.common_id }))
     .sort((a, b) => a.df - b.df || (a.g < b.g ? -1 : 1))
     .slice(0, RAREST_GRAMS)
-    .map((r, i) => {
+    .map((r) => {
       total += r.df;
-      // 最も珍しい bigram は必ず全国で読む (住所が無くても、同じ商号の法人をすべて引けるように)
-      return { ...r, national: i === 0 || total <= NATIONAL_ROWS };
+      return { ...r, national: r.commonId === null && total <= NATIONAL_ROWS };
     });
 };
 
 /**
  * 引く bigram の行。全国で読む bigram は全部の行、残りは住所の市区町村の行だけ。共通でない bigram は bigram の
- * shard のファイル、共通の bigram (common_id がある) は市区町村の区分ごとのファイルにある
+ * shard のファイル、共通の bigram (common_id がある) は市区町村の区分ごとのファイルにある (全国では読まない)
  */
 const postingsOf = async (
   q: Query,
@@ -235,14 +239,10 @@ const postingsOf = async (
   const buckets = [...new Set([...q.cityCodes].map((c) => cityBucket(c, CITY_BUCKETS)))];
   const reads = chosen.flatMap((c) => {
     if (!c.national && q.cityCodes.size === 0) return [];
-    const paths =
-      c.commonId === null
-        ? [rarePath(c.g)]
-        : (c.national ? Array.from({ length: CITY_BUCKETS }, (_, b) => b) : buckets).map((b) =>
-            commonPath(c.commonId ?? 0, b),
-          );
+    const { commonId } = c;
+    const paths = commonId === null ? [rarePath(c.g)] : buckets.map((b) => commonPath(commonId, b));
     return paths.map(async (p) =>
-      (await read<Posting>(p)).filter(
+      (await read<Posting>(p, false)).filter(
         (r) => r.g === c.g && (c.national || q.cityCodes.has(r.lg_code)),
       ),
     );
@@ -260,8 +260,11 @@ const answerByFuzzy = (
 ): Answer => {
   const idf = new Map(chosen.map((c) => [c.g, c.idf]));
   const nationalGrams = new Set(chosen.filter((c) => c.national).map((c) => c.g));
+  // 商号が同じ法人は、引いた bigram をすべて持つ行として全国の候補に加える
+  // (住所が無く、共通の bigram しか持たない商号でも、同じ商号の法人を候補に並べるため)
+  const sameName = exact.flatMap((p) => chosen.map((c) => ({ ...p, g: c.g })));
   const national = topByScore(
-    rows.filter((p) => nationalGrams.has(p.g)),
+    [...rows.filter((p) => nationalGrams.has(p.g)), ...sameName],
     idf,
     q.core,
   );
@@ -270,7 +273,7 @@ const answerByFuzzy = (
     idf,
     q.core,
   );
-  const byNumber = new Map(rows.map((p) => [p.corporate_number, p]));
+  const byNumber = new Map([...rows, ...sameName].map((p) => [p.corporate_number, p]));
   const ranked = [...new Set([...national.keys(), ...local.keys()])]
     .flatMap((cn) => {
       const p = byNumber.get(cn);
@@ -313,14 +316,19 @@ export const forwardMany = async (
       q.core === "" ? [] : (await read<Row>(exactPath(q.core))).filter((p) => p.core === q.core),
     ),
   );
-  return Promise.all(
-    queries.map(async (q, i) => {
-      const answer = answerByExact(q, cityOf, exact[i]);
-      if (answer) return answer;
-      const chosen = await chooseGrams(q, read);
-      return answerByFuzzy(q, cityOf, exact[i], chosen, await postingsOf(q, chosen, read));
+  const answers = queries.map((q, i) => answerByExact(q, cityOf, exact[i]));
+  const rest = queries.flatMap((_, i) => (answers[i] === null ? [i] : []));
+  // 近い商号の検索は FUZZY_CONCURRENCY 件ずつ進める (1 件で数 MB を読むので、全部を並べるとメモリが足りない)
+  await Promise.all(
+    Array.from({ length: FUZZY_CONCURRENCY }, async () => {
+      for (let i = rest.shift(); i !== undefined; i = rest.shift()) {
+        const q = queries[i];
+        const chosen = await chooseGrams(q, read);
+        answers[i] = answerByFuzzy(q, cityOf, exact[i], chosen, await postingsOf(q, chosen, read));
+      }
     }),
   );
+  return answers.map((a, i) => a ?? answerByFuzzy(queries[i], cityOf, exact[i], [], []));
 };
 
 /** 1 件の正引き */

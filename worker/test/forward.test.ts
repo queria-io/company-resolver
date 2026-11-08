@@ -143,14 +143,14 @@ describe("/v1/forward/batch", () => {
       ["name", "株式会社クエリア"],
       ["address", "東京都千代田区紀尾井町1-3"],
       ["name", "株式会社クエア"],
-      ["address", ""],
+      ["address", "東京都千代田区"],
     ]);
     const res = await app.request(`/v1/forward/batch?${params}`, {}, env);
     expect(res.status).toBe(200);
     const { results } = (await res.json()) as { results: (Answer & { input: unknown })[] };
     expect(results.map((r) => [r.input, r.status])).toEqual([
       [{ name: "株式会社クエリア", address: "東京都千代田区紀尾井町1-3" }, "matched"],
-      [{ name: "株式会社クエア", address: null }, "candidates"],
+      [{ name: "株式会社クエア", address: "東京都千代田区" }, "candidates"],
     ]);
   });
 
