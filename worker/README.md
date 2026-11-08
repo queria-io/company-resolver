@@ -26,17 +26,17 @@ GET /v1/reverse?corporate_number=1180301018771
 
 ### 正引き（D1）
 
-`scripts/sync_d1.py` が、FDL の `refs/heads/main` が指すバージョンの `forward` の表を D1（`wrangler.jsonc` の `DB`）に入れる。Sync のあとに同じ workflow の `d1` ジョブが流す。
+`scripts/sync_d1.py` が、FDL の `refs/heads/main` が指すバージョンの `forward` の表（`company_core`・`posting`・`gram`・`city`）を D1（`wrangler.jsonc` の `DB`）に入れる。Sync のあとに同じ workflow の `d1` ジョブが流す。
 
 - `company`: 法人番号ごとの商号の本体・法人格・lg_code・商号。商号の本体に索引
 - `posting`: bigram・lg_code・法人番号（主キー）
 - `gram`: bigram ごとの出現する法人の数（df）と IDF
 - `city`: 市区町村の lg_code・都道府県名・市区町村名。Worker は 5 分ごとに読み直す
-- `meta`: 最後に反映したバージョンの ID（`version`）
+- `meta`: 最後に反映したバージョンの ID（`version`）と、テーブルの定義のバージョン（`schema`）
 
 正引きは、`company` で商号の本体が同じ法人を引く文と、`gram`・`posting`・`company` で近い商号を引く文を、1 回の batch で流す。商号と法人格（住所があれば市区町村も）が一致する法人が 1 件だけなら前者で答え、それ以外は後者の候補を編集距離で並べる。
 
-反映は、`meta` のバージョンと新しいバージョンの `forward.posting` を比べ、変わった行だけを主キーで消す・書く。`gram` と `city` は毎回全部を書き直す。書き終えたら法人数と `posting` の行数を元データと照合し、合っていれば最後に `meta` を書く。前のバージョンのカタログを読めないときと `--full` のときは、テーブルを作り直して全件を入れる（そのあいだ正引きは失敗する）。
+反映は、`meta` のバージョンと新しいバージョンの `forward.company_core`・`forward.posting` を比べ、変わった行だけを主キーで消す・書く。`gram` と `city` は毎回全部を書き直す。書き終えたら法人数と `posting` の行数を元データと照合し、合っていれば最後に `meta` を書く。`meta` の `schema`（`sync_d1.py` の `SCHEMA` から作るテーブルの定義のバージョン）が違うとき、前のバージョンのカタログを読めないとき、`--full` のときは、テーブルを作り直して全件を入れる（そのあいだ正引きは失敗する）。
 
 ```bash
 uv run python scripts/sync_d1.py          # リポジトリの直下で。wrangler login か CLOUDFLARE_API_TOKEN が要る
@@ -50,9 +50,16 @@ Worker は DuckLake のカタログを読まず、FDL の `refs/heads/main` が�
 ## コマンド
 
 ```bash
+uv run pytest    # リポジトリの直下で。sync_d1.py の差分の反映が全件の入れ直しと一致するか
 pnpm test        # vitest (Workers ランタイム)。索引は test/fixture/ (リポジトリの直下で uv run python worker/test/make-fixture.py)。正引きは forward.sql を D1 に流す
 pnpm typecheck
 pnpm check       # oxlint + oxfmt --check
 pnpm tsx bench/run.ts <index.sqlite> <queries.jsonl>   # 手元の SQLite で正解率と処理時間を計測 (手順は ../BENCHMARK.md)
 node bench/latency.mjs https://company-resolver.queria.io   # 手元から API の応答時間を計測
 ```
+
+## デプロイ
+
+Cloudflare の Workers Builds が、`main` に入った変更を `npx wrangler deploy` で本番（`queria-company-resolver`）にデプロイする。PR をマージすると本番に出る。`main` 以外のブランチへの push は `npx wrangler versions upload` で、本番に出さないバージョンだけを作る。どちらもルートは `worker/`。
+
+正引きの索引（D1）は Worker のデプロイとは別に、`.github/workflows/sync.yml` の `d1` ジョブが反映する。D1 のテーブルを変える PR は、マージの前に `uv run python scripts/sync_d1.py` で D1 を新しい形にしておく。
