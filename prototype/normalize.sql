@@ -2,11 +2,11 @@
 -- 法人格は除いて索引を作り、比較では別の列として突き合わせる。
 CREATE OR REPLACE MACRO legal_form(s) AS (
   CASE
-    WHEN s ~ '(株式会社|\(株\))' THEN '株式会社'
-    WHEN s ~ '(有限会社|\(有\))' THEN '有限会社'
-    WHEN s ~ '(合同会社|\(同\))' THEN '合同会社'
-    WHEN s ~ '(合資会社|\(資\))' THEN '合資会社'
-    WHEN s ~ '(合名会社|\(名\))' THEN '合名会社'
+    WHEN regexp_matches(s, '株式会社|\(株\)') THEN '株式会社'
+    WHEN regexp_matches(s, '有限会社|\(有\)') THEN '有限会社'
+    WHEN regexp_matches(s, '合同会社|\(同\)') THEN '合同会社'
+    WHEN regexp_matches(s, '合資会社|\(資\)') THEN '合資会社'
+    WHEN regexp_matches(s, '合名会社|\(名\)') THEN '合名会社'
     ELSE NULL
   END
 );
