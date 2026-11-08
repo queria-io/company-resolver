@@ -9,3 +9,5 @@ logs/
 .user.yml
 package-lock.yml
 .fdl/
+# テストの索引 (worker/test/make-fixture.py が作る) はリポジトリに入れる
+!worker/test/fixture/**/*.parquet
