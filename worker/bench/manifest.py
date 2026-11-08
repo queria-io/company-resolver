@@ -9,7 +9,7 @@ from pathlib import Path
 
 import duckdb
 
-TABLES = ["forward.posting", "forward.gram", "forward.city", "reverse.company"]
+TABLES = ["forward.exact_name", "forward.posting", "forward.gram", "forward.city", "reverse.company"]
 
 
 def write_manifest(catalog: str, data_dir: str) -> None:

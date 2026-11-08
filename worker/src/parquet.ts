@@ -9,6 +9,7 @@ import {
 } from "hyparquet";
 
 import type { FileRef } from "./source";
+import type { Store } from "./store";
 
 // 索引は zstd で書いている (dbt_project.yml の parquet_compression)。fzstd は純粋な JS なので Workers でそのまま動く
 const compressors: Compressors = { ZSTD: (input) => decompress(input) };
@@ -20,7 +21,7 @@ export type ReadLog = { reads: number; bytes: number };
 const TAIL_BYTES = 32 * 1024;
 
 const rangeBuffer = (
-  bucket: R2Bucket,
+  bucket: Store,
   key: string,
   byteLength: number,
   log: ReadLog,
@@ -42,7 +43,7 @@ export type ParquetFile = { file: AsyncBuffer; metadata: FileMetaData };
  * ファイルが無ければ null
  */
 export const openFile = async (
-  bucket: R2Bucket,
+  bucket: Store,
   { key, footer: footerLength }: FileRef,
   log: ReadLog,
 ): Promise<ParquetFile | null> => {
@@ -65,7 +66,7 @@ export const openFile = async (
 
 /** ファイルを丸ごと読む (小さいファイル用)。ファイルが無ければ null */
 export const readWhole = async <T>(
-  bucket: R2Bucket,
+  bucket: Store,
   key: string,
   log: ReadLog,
 ): Promise<T[] | null> => {

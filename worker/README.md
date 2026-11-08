@@ -22,12 +22,13 @@ GET /v1/reverse?corporate_number=1180301018771
 
 リポジトリの直下の dbt のデータセット（Queria の `company_resolver`）。毎月 `.github/workflows/sync.yml` が法人番号のデータセットから作り直す。Worker は DuckLake のカタログを読まず、FDL の `refs/heads/main` が指すバージョンの `files.json` から、テーブルごとの Parquet を引いて直接読む（`src/source.ts`）。置き場は `wrangler.jsonc` の `DATA_SOURCE`。
 
+- `forward.exact_name`: 正規化した商号の本体ごとの法人（商号・法人格・lg_code つき）。`shard`（商号の本体のコードポイントの和を 4,096 で割った余り）ごとにファイルを分け、1 ファイルを丸ごと読む
 - `forward.posting`: bigram ごとの法人（商号・法人格・lg_code つき）。`shard` ごとにファイルを分け、bigram と lg_code の順に並べ、行グループは 2,048 行
 - `forward.gram`: bigram ごとの出現する法人の数（df）と IDF。`shard` ごとにファイルを分ける
 - `forward.city`: 市区町村の lg_code・都道府県名・市区町村名
 - `reverse.company`: 逆引き用の法人の一覧。`shard`（法人番号の下 3 桁）ごとにファイルを分け、法人番号の順に並べ、行グループは 2,048 行
 
-bigram の `shard` は、文字のコードポイントの和を 1,024 で割った余り。1 件の問い合わせで R2 を読むのは 2 回の往復で、1 回目に `gram` と `posting` のフッターと `city`、2 回目に `posting` の行グループを読む。逆引きは `company` のフッターと行グループの 2 回。
+bigram の `shard` は、文字のコードポイントの和を 1,024 で割った余り。正引きは 1 回目の往復で `exact_name` の 1 ファイルと `city` を読み、商号と法人格（住所があれば市区町村も）が一致する法人が 1 件だけなら答える。それ以外は、2 回目に `gram` と `posting` のフッター、3 回目に `posting` の行グループを読む。逆引きは `company` のフッターと行グループの 2 回。
 
 ## コマンド
 

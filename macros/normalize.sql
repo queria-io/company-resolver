@@ -31,3 +31,9 @@ CASE WHEN length({{ s }}) <= 1 THEN [{{ s }}]
 {% macro gram_shard(g) -%}
 CAST(list_sum([unicode(substr({{ g }}, i, 1)) FOR i IN range(1, length({{ g }}) + 1)]) % 1024 AS INTEGER)
 {%- endmacro %}
+
+-- 商号が同じ法人の表 (forward.exact_name) のファイルの番号: 商号の本体のコードポイントの和を 4,096 で割った余り
+-- (src/normalize.ts の shardOf。Worker は入力の商号の番号のファイルを丸ごと読む)
+{% macro name_shard(core) -%}
+CAST(list_sum([unicode(substr({{ core }}, i, 1)) FOR i IN range(1, length({{ core }}) + 1)]) % 4096 AS INTEGER)
+{%- endmacro %}

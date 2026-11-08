@@ -17,9 +17,12 @@ import {
   type ReadLog,
 } from "./parquet";
 import { type Index, shardFiles, type Table } from "./source";
+import type { Store } from "./store";
 
 /** bigram のファイルの番号の数 (macros/normalize.sql の gram_shard) */
 const SHARDS = 1024;
+/** 商号が同じ法人の表 (forward.exact_name) のファイルの数 (macros/normalize.sql の name_shard) */
+const NAME_SHARDS = 4096;
 /** 1 件の検索で引く bigram の数。出現する法人が少ない順に取る */
 const RAREST_GRAMS = 8;
 /** 編集距離で比べる候補の数 (全国と、住所の市区町村の中から、それぞれ) */
@@ -31,14 +34,14 @@ export type Input = { name: string; address?: string; limit?: number };
 
 type Gram = { g: string; df: number; idf: number };
 type City = { lg_code: string; prefecture_name: string; city_name: string };
-type Posting = {
-  g: string;
+type Row = {
   lg_code: string;
   corporate_number: string;
   legal_form: string | null;
   core: string;
   name: string;
 };
+type Posting = Row & { g: string };
 
 export type Evidence = {
   name: string;
@@ -128,11 +131,89 @@ const groupsFor = (file: ParquetFile, g: string, cityCodes?: ReadonlySet<string>
   );
 };
 
+type Ranked = { p: Row; ed: number; cityOk: boolean };
+
+/** 照合の結果を応答の形にする */
+const answerOf = (
+  input: Input,
+  cities: readonly City[],
+  cityCodes: ReadonlySet<string>,
+  status: Status,
+  sameCount: number | null,
+  ranked: readonly Ranked[],
+): Answer => {
+  const name = nfkc(input.name);
+  const lf = legalForm(name);
+  const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
+  return {
+    status,
+    same_name_count: sameCount,
+    candidates: ranked.slice(0, input.limit ?? 5).map(({ p, ed, cityOk }) => ({
+      corporate_number: p.corporate_number,
+      name: p.name,
+      prefecture: cityOf.get(p.lg_code)?.prefecture_name ?? null,
+      city: cityOf.get(p.lg_code)?.city_name ?? null,
+      lg_code: p.lg_code,
+      evidence: {
+        name: ed > 0 ? `edit(${ed})` : name === p.name ? "exact" : "normalized",
+        legal_form: lf === null ? "missing" : lf === p.legal_form ? "exact" : "mismatch",
+        city: !input.address || cityCodes.size === 0 ? "missing" : cityOk ? "exact" : "mismatch",
+      },
+    })),
+  };
+};
+
+/**
+ * 正引き。まず正規化した商号が同じ法人の表 (forward.exact_name、商号の番号ごとのファイルを丸ごと読む) を引き、
+ * 商号と法人格 (と住所の市区町村) が一致する法人が 1 件だけなら、それで答える (matched)。
+ * それ以外は bigram の索引で近い商号を検索する (同じ条件の法人が複数あるときも、近い商号を候補に並べるため)
+ */
 export const forward = async (
-  bucket: R2Bucket,
+  bucket: Store,
   index: Index,
   input: Input,
   log: ReadLog = { reads: 0, bytes: 0 },
+): Promise<Answer> => {
+  const name = nfkc(input.name);
+  const lf = legalForm(name);
+  const core = coreName(name);
+  // 1 回目: 商号が同じ法人と、市区町村の一覧を同時に読む
+  const [nameRows, cityRows] = await Promise.all([
+    Promise.all(
+      shardFiles(index, "forward.exact_name", String(shardOf(core, NAME_SHARDS))).map((f) =>
+        readWhole<Row>(bucket, f.key, log),
+      ),
+    ),
+    Promise.all(index.tables["forward.city"].map((f) => readWhole<City>(bucket, f.key, log))),
+  ]);
+  const cities = cityRows.flatMap((r) => r ?? []);
+  const inCity = input.address ? citiesIn(nfkc(input.address), cities) : [];
+  const cityCodes = new Set(inCity.map((c) => c.lg_code));
+  const legalOk = (p: Row) => lf === null || lf === p.legal_form;
+  const cityOk = (p: Row) => cityCodes.has(p.lg_code);
+  const same = nameRows.flatMap((r) => r ?? []).filter((p) => core !== "" && p.core === core);
+  // 住所の市区町村が分かるときは、市区町村まで一致して初めて商号の一致とみなす
+  const hits = same.filter((p) => legalOk(p) && (cityCodes.size === 0 || cityOk(p)));
+  if (hits.length !== 1) return fuzzy(bucket, index, input, cities, cityCodes, log);
+  const ranked = same
+    .map((p) => ({ p, ed: 0, cityOk: cityOk(p) }))
+    .sort(
+      (a, b) =>
+        Number(b.cityOk) - Number(a.cityOk) ||
+        Number(legalOk(b.p)) - Number(legalOk(a.p)) ||
+        a.p.corporate_number.localeCompare(b.p.corporate_number),
+    );
+  return answerOf(input, cities, cityCodes, "matched", 1, ranked);
+};
+
+/** bigram の索引で、商号が近い法人を検索する */
+const fuzzy = async (
+  bucket: Store,
+  index: Index,
+  input: Input,
+  cities: readonly City[],
+  cityCodes: ReadonlySet<string>,
+  log: ReadLog,
 ): Promise<Answer> => {
   const name = nfkc(input.name);
   const lf = legalForm(name);
@@ -141,9 +222,9 @@ export const forward = async (
   const shards = [...new Set(grams.map((g) => shardOf(g, SHARDS)))];
   const filesOf = (table: Table, k: number) => shardFiles(index, table, String(k));
 
-  // 1 回目: bigram の df、索引のフッター、市区町村の一覧を同時に読む。
+  // 2 回目: bigram の df と索引のフッターを同時に読む。
   // 番号のファイルが無いのは、その番号の bigram を持つ法人が無いとき
-  const [gramRows, files, cityRows] = await Promise.all([
+  const [gramRows, files] = await Promise.all([
     Promise.all(
       shards.flatMap((k) =>
         filesOf("forward.gram", k).map((f) => readWhole<Gram>(bucket, f.key, log)),
@@ -156,9 +237,7 @@ export const forward = async (
         ),
       ),
     ),
-    Promise.all(index.tables["forward.city"].map((f) => readWhole<City>(bucket, f.key, log))),
   ]);
-  const cities = cityRows.flatMap((r) => r ?? []);
   const wanted = new Set(grams);
   const chosen = gramRows
     .flatMap((r) => r ?? [])
@@ -175,14 +254,12 @@ export const forward = async (
       { total: 0, list: [] },
     ).list;
   const idf = new Map(chosen.map((r) => [r.g, r.idf]));
-  const inCity = input.address ? citiesIn(nfkc(input.address), cities) : [];
-  const cityCodes = new Set(inCity.map((c) => c.lg_code));
   const filesByShard = Map.groupBy(
     files.flatMap(([k, f]) => (f ? [{ k, f }] : [])),
     ({ k }) => k,
   );
 
-  // 2 回目: 全国で読む bigram は全部の行、残りは住所の市区町村の行だけを読む。
+  // 3 回目: 全国で読む bigram は全部の行、残りは住所の市区町村の行だけを読む。
   // 同じファイルの bigram は行グループをまとめ、同じ行グループを 2 回読まない
   const reads = chosen.filter((r) => r.full || cityCodes.size > 0);
   const byFile = Map.groupBy(reads, (r) => shardOf(r.g, SHARDS));
@@ -269,22 +346,5 @@ export const forward = async (
       ? "candidates"
       : "not_found";
 
-  const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
-  const limit = input.limit ?? 5;
-  return {
-    status,
-    same_name_count: sameCount,
-    candidates: ranked.slice(0, limit).map(({ p, ed, cityOk }) => ({
-      corporate_number: p.corporate_number,
-      name: p.name,
-      prefecture: cityOf.get(p.lg_code)?.prefecture_name ?? null,
-      city: cityOf.get(p.lg_code)?.city_name ?? null,
-      lg_code: p.lg_code,
-      evidence: {
-        name: ed > 0 ? `edit(${ed})` : name === p.name ? "exact" : "normalized",
-        legal_form: lf === null ? "missing" : lf === p.legal_form ? "exact" : "mismatch",
-        city: !input.address || cityCodes.size === 0 ? "missing" : cityOk ? "exact" : "mismatch",
-      },
-    })),
-  };
+  return answerOf(input, cities, cityCodes, status, sameCount, ranked);
 };

@@ -4,10 +4,13 @@
 //   - 「….json」: 目録。{ "version": "…", "tables": { "forward.posting": ["forward/posting/shard=1/a.parquet"], … } }。
 //     パスは目録からの相対。テストと、セルフホストで自分の Parquet を読ませるときに使う
 
+import type { Store } from "./store";
+
 /** Worker が読むテーブル (スキーマ.テーブル)。dbt のモデル (models/) と同じ名前 */
 export const TABLES = [
   "forward.posting",
   "forward.gram",
+  "forward.exact_name",
   "forward.city",
   "reverse.company",
 ] as const;
@@ -29,7 +32,7 @@ type FileList = {
   >;
 };
 
-const getText = async (bucket: R2Bucket, key: string): Promise<string> => {
+const getText = async (bucket: Store, key: string): Promise<string> => {
   const object = await bucket.get(key);
   if (!object) throw new Error(`not found: ${key}`);
   return object.text();
@@ -37,7 +40,7 @@ const getText = async (bucket: R2Bucket, key: string): Promise<string> => {
 
 const dirOf = (key: string) => key.slice(0, key.lastIndexOf("/") + 1);
 
-const byTable = (pick: (t: Table) => FileRef[]): Record<Table, FileRef[]> =>
+export const byTable = (pick: (t: Table) => FileRef[]): Record<Table, FileRef[]> =>
   Object.fromEntries(TABLES.map((t) => [t, pick(t)])) as Record<Table, FileRef[]>;
 
 export const fromManifest = (key: string, m: Manifest): Index => ({
@@ -61,7 +64,7 @@ export const fromFileList = (root: string, version: string, list: FileList): Ind
   }),
 });
 
-const load = async (bucket: R2Bucket, source: string): Promise<Index> => {
+const load = async (bucket: Store, source: string): Promise<Index> => {
   if (source.endsWith(".json")) {
     return fromManifest(source, JSON.parse(await getText(bucket, source)) as Manifest);
   }
@@ -76,7 +79,7 @@ const TTL_MS = 5 * 60 * 1000;
 let cached: { source: string; at: number; index: Promise<Index> } | null = null;
 
 /** 置き場の索引のファイル一覧。問い合わせのたびに R2 を 3 回読まないよう、TTL_MS のあいだ覚えておく */
-export const loadIndex = (bucket: R2Bucket, source: string, now = Date.now()): Promise<Index> => {
+export const loadIndex = (bucket: Store, source: string, now = Date.now()): Promise<Index> => {
   if (cached?.source === source && now - cached.at < TTL_MS) return cached.index;
   const index = load(bucket, source);
   cached = { source, at: now, index };

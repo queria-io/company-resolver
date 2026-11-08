@@ -10,6 +10,7 @@ import { basename, dirname, join } from "node:path";
 import type { ReadLog } from "../src/parquet";
 import { forward } from "../src/forward";
 import { loadIndex } from "../src/source";
+import type { Store } from "../src/store";
 
 type Query = { truth: string; name: string; address: string | null };
 
@@ -24,7 +25,7 @@ const readRange = (path: string, offset: number, length: number): ArrayBuffer =>
 type Range = { offset?: number; length?: number; suffix?: number };
 
 /** R2 の get (Range つき) だけを、ディレクトリのファイルで置き換える */
-const fileBucket = (root: string) => ({
+const fileBucket = (root: string): Store => ({
   get: async (key: string, options?: { range?: Range }) => {
     const path = join(root, key);
     if (!existsSync(path)) return null;
@@ -46,8 +47,7 @@ const main = async (manifest: string, queriesPath: string) => {
     .trim()
     .split("\n")
     .map((l) => JSON.parse(l));
-  // fileBucket は R2Bucket のうち forward が使う get だけを持つ
-  const bucket = fileBucket(dirname(manifest)) as unknown as R2Bucket;
+  const bucket = fileBucket(dirname(manifest));
   const index = await loadIndex(bucket, basename(manifest));
   const stats = { matched: 0, matchedCorrect: 0, top1: 0, top5: 0 };
   const reads: number[] = [];

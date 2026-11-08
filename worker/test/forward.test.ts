@@ -91,4 +91,13 @@ describe("/v1/forward", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("商号の表で 1 件に決まれば、商号の表と市区町村の一覧の 2 つだけを読んで答える", async () => {
+    const res = await app.request(
+      `/v1/forward?${new URLSearchParams({ name: "株式会社クエリア", address: "東京都千代田区紀尾井町1-3" })}`,
+      {},
+      env,
+    );
+    expect(res.headers.get("X-R2-Reads")).toBe("2");
+  });
 });

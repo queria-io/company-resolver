@@ -42,6 +42,7 @@ models:
           - "RESET threads"
           - "RESET partitioned_write_flush_threshold"
       gram: *by_shard
+      exact_name: *by_shard
     # 逆引き (/v1/reverse)。法人番号の下 3 桁 (shard) ごとにファイルを分ける
     reverse:
       +schema: reverse
