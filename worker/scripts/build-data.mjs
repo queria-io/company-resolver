@@ -18,6 +18,7 @@ const TABLES = [
   "forward.posting_rare",
   "forward.posting_common",
   "forward.city",
+  "forward.public_body",
 ];
 /** 静的アセットの 1 ファイルの上限 */
 const MAX_BYTES = 25 * 1024 * 1024;
