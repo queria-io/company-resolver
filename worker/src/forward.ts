@@ -218,11 +218,13 @@ const answerByExact = (
 ): Answer | null => {
   // exact_first: 商号が同じ法人で 1 件に決まれば、bigram の索引を引かずに答える
   if (!q.on("exact_first") || sameOf(q, exact).length !== 1) return null;
-  // 商号が同じで法人格や市区町村が違う法人も、後ろの候補に並べる
+  // 一致とみなした法人を先頭に、商号が同じで法人格や市区町村が違う法人も後ろの候補に並べる
+  const same = new Set(sameOf(q, exact));
   const ranked = exact
     .map((p) => ({ p, ed: 0, cityOk: q.cityOk(p) }))
     .sort(
       (a, b) =>
+        Number(same.has(b.p)) - Number(same.has(a.p)) ||
         Number(b.cityOk) - Number(a.cityOk) ||
         Number(q.legalOk(b.p)) - Number(q.legalOk(a.p)) ||
         a.p.corporate_number.localeCompare(b.p.corporate_number),
