@@ -18,6 +18,20 @@ const CITY_BUCKETS = 64;
 
 export type Input = { name: string; address?: string; limit?: number };
 
+/**
+ * 照合の規則 (DESIGN.md の「照合の規則」の表と同じ ID)。bench/ablate.ts が 1 つずつ外して、精度への効き目を測る。
+ * 正規化の規則は索引の作り方と一緒に変わるので、ここには含めない
+ */
+export const RULES = [
+  "exact_first",
+  "legal_form",
+  "city_match",
+  "city_search",
+  "city_rank",
+  "same_name_candidates",
+] as const;
+export type Rule = (typeof RULES)[number];
+
 export type City = { lg_code: string; prefecture_name: string; city_name: string };
 export type Row = {
   lg_code: string;
@@ -128,6 +142,8 @@ const topByScore = (
 /** 1 件の問い合わせを、正規化した商号と住所の市区町村にしたもの */
 type Query = {
   input: Input;
+  /** 規則を使うか (外した規則は false) */
+  on: (rule: Rule) => boolean;
   name: string;
   lf: string | null;
   core: string;
@@ -163,7 +179,8 @@ const answerOf = (
   };
 };
 
-const queryOf = (input: Input, cities: readonly City[]): Query => {
+const queryOf = (input: Input, cities: readonly City[], off: ReadonlySet<Rule>): Query => {
+  const on = (rule: Rule) => !off.has(rule);
   const name = nfkc(input.name);
   const lf = legalForm(name);
   const cityCodes = new Set(
@@ -171,18 +188,24 @@ const queryOf = (input: Input, cities: readonly City[]): Query => {
   );
   return {
     input,
+    on,
     name,
     lf,
     core: coreName(name),
     cityCodes,
-    legalOk: (p) => lf === null || lf === p.legal_form,
+    // legal_form: 入力に法人格があれば、法人格が同じ法人だけを一致とみなす
+    legalOk: (p) => !on("legal_form") || lf === null || lf === p.legal_form,
     cityOk: (p) => cityCodes.has(p.lg_code),
   };
 };
 
+/** city_match: 住所の市区町村が分かるときは、市区町村まで一致して初めて一致とみなす */
+const cityMatches = (q: Query, p: Row): boolean =>
+  !q.on("city_match") || q.cityCodes.size === 0 || q.cityOk(p);
+
 /** 商号が同じ法人のうち、法人格 (住所の市区町村が分かれば市区町村も) が一致するもの */
 const sameOf = (q: Query, exact: readonly Row[]): Row[] =>
-  exact.filter((p) => q.legalOk(p) && (q.cityCodes.size === 0 || q.cityOk(p)));
+  exact.filter((p) => q.legalOk(p) && cityMatches(q, p));
 
 /**
  * 商号が同じ法人で答えが決まれば、その応答。商号と法人格 (住所の市区町村が分かれば市区町村も) が一致する
@@ -193,8 +216,8 @@ const answerByExact = (
   cityOf: ReadonlyMap<string, City>,
   exact: readonly Row[],
 ): Answer | null => {
-  // 住所の市区町村が分かるときは、市区町村まで一致して初めて商号の一致とみなす
-  if (sameOf(q, exact).length !== 1) return null;
+  // exact_first: 商号が同じ法人で 1 件に決まれば、bigram の索引を引かずに答える
+  if (!q.on("exact_first") || sameOf(q, exact).length !== 1) return null;
   // 商号が同じで法人格や市区町村が違う法人も、後ろの候補に並べる
   const ranked = exact
     .map((p) => ({ p, ed: 0, cityOk: q.cityOk(p) }))
@@ -237,8 +260,10 @@ const postingsOf = async (
   read: RowReader,
 ): Promise<Posting[]> => {
   const buckets = [...new Set([...q.cityCodes].map((c) => cityBucket(c, CITY_BUCKETS)))];
+  // city_search: 全国で読まない bigram も、住所の市区町村の中では読む
+  const local = q.on("city_search") && q.cityCodes.size > 0;
   const reads = chosen.flatMap((c) => {
-    if (!c.national && q.cityCodes.size === 0) return [];
+    if (!c.national && !local) return [];
     const { commonId } = c;
     const paths = commonId === null ? [rarePath(c.g)] : buckets.map((b) => commonPath(commonId, b));
     return paths.map(async (p) =>
@@ -260,19 +285,23 @@ const answerByFuzzy = (
 ): Answer => {
   const idf = new Map(chosen.map((c) => [c.g, c.idf]));
   const nationalGrams = new Set(chosen.filter((c) => c.national).map((c) => c.g));
-  // 商号が同じ法人は、引いた bigram をすべて持つ行として全国の候補に加える
+  // same_name_candidates: 商号が同じ法人は、引いた bigram をすべて持つ行として全国の候補に加える
   // (住所が無く、共通の bigram しか持たない商号でも、同じ商号の法人を候補に並べるため)
-  const sameName = exact.flatMap((p) => chosen.map((c) => ({ ...p, g: c.g })));
+  const sameName = q.on("same_name_candidates")
+    ? exact.flatMap((p) => chosen.map((c) => ({ ...p, g: c.g })))
+    : [];
   const national = topByScore(
     [...rows.filter((p) => nationalGrams.has(p.g)), ...sameName],
     idf,
     q.core,
   );
   const local = topByScore(
-    rows.filter((p) => q.cityCodes.has(p.lg_code)),
+    rows.filter((p) => q.on("city_search") && q.cityCodes.has(p.lg_code)),
     idf,
     q.core,
   );
+  // city_rank: 住所の市区町村が違う候補は、商号の編集距離 2 つ分だけ後ろに並べる
+  const penalty = (cityOk: boolean) => (cityOk || !q.on("city_rank") ? 0 : 2);
   const byNumber = new Map([...rows, ...sameName].map((p) => [p.corporate_number, p]));
   const ranked = [...new Set([...national.keys(), ...local.keys()])]
     .flatMap((cn) => {
@@ -285,18 +314,23 @@ const answerByFuzzy = (
     })
     .sort(
       (a, b) =>
-        a.ed + (a.cityOk ? 0 : 2) - (b.ed + (b.cityOk ? 0 : 2)) ||
+        a.ed + penalty(a.cityOk) - (b.ed + penalty(b.cityOk)) ||
         a.ed - b.ed ||
         Number(b.legal) - Number(a.legal) ||
         b.score - a.score ||
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
   const top = ranked[0];
-  // 商号が同じ法人が 1 件なら answerByExact で答えているので、ここで商号が一致するのは同じ条件の法人が複数あるとき
-  const isExact =
-    top !== undefined && top.ed === 0 && top.legal && (q.cityCodes.size === 0 || top.cityOk);
-  const status: Status = isExact ? "ambiguous" : ranked.length > 0 ? "candidates" : "not_found";
+  const isExact = top !== undefined && top.ed === 0 && top.legal && cityMatches(q, top.p);
   const sameCount = chosen.length > 0 || exact.length > 0 ? sameOf(q, exact).length : null;
+  // 商号が同じ条件の法人が 1 件なら matched (ふつうは answerByExact で答えている)、複数なら ambiguous
+  const status: Status = isExact
+    ? sameCount === 1
+      ? "matched"
+      : "ambiguous"
+    : ranked.length > 0
+      ? "candidates"
+      : "not_found";
   return answerOf(q, cityOf, status, sameCount, ranked);
 };
 
@@ -308,8 +342,9 @@ export const forwardMany = async (
   read: RowReader,
   cities: readonly City[],
   inputs: readonly Input[],
+  off: ReadonlySet<Rule> = new Set(),
 ): Promise<Answer[]> => {
-  const queries = inputs.map((input) => queryOf(input, cities));
+  const queries = inputs.map((input) => queryOf(input, cities, off));
   const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
   const exact = await Promise.all(
     queries.map(async (q) =>
@@ -336,4 +371,5 @@ export const forward = async (
   read: RowReader,
   cities: readonly City[],
   input: Input,
-): Promise<Answer> => (await forwardMany(read, cities, [input]))[0];
+  off: ReadonlySet<Rule> = new Set(),
+): Promise<Answer> => (await forwardMany(read, cities, [input], off))[0];
