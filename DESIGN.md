@@ -1,6 +1,6 @@
 # 設計方針
 
-Queria Company Resolver（法人名寄せツール）の照合の規則と応答の形、改修で守る観点を定める。
+Queria Company Resolver（法人名寄せ API）の照合の規則と応答の形、改修で守る観点を定める。
 
 ## 入力と出力
 
