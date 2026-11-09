@@ -24,6 +24,8 @@ const TABLES = [
     order: "common_id, bucket, lg_code, corporate_number",
   },
   { name: "city", by: [], order: "lg_code" },
+  // 部局の名前の照合 (parent_body) に使う。表の無いバージョンでは置かず、Worker はこの規則を使わない
+  { name: "public_body", by: [], order: "corporate_number", optional: true },
 ];
 /** 静的アセットの 1 ファイルの上限 */
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -92,7 +94,20 @@ const flatten = async (dir) => {
   }
 };
 
+const tables = new Set(
+  (
+    await (
+      await con.runAndReadAll(
+        "SELECT table_name FROM information_schema.tables WHERE table_catalog = 'c' AND table_schema = 'forward'",
+      )
+    ).getRowObjects()
+  ).map((r) => r.table_name),
+);
 for (const t of TABLES) {
+  if (!tables.has(t.name)) {
+    if (t.optional) continue;
+    throw new Error(`forward.${t.name} is not in ${source.version}`);
+  }
   const query = `SELECT * FROM c.forward.${t.name} ORDER BY ${t.order}`;
   if (t.by.length === 0) {
     await con.run(

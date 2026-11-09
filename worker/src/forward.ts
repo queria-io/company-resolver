@@ -29,6 +29,7 @@ export const RULES = [
   "city_search",
   "city_rank",
   "same_name_candidates",
+  "parent_body",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -100,6 +101,79 @@ export const loadCities = (read: RowReader): Promise<City[]> => {
   return cities;
 };
 
+/** 国の機関と地方公共団体 (forward.public_body) */
+type PublicBody = {
+  corporate_number: string;
+  name: string;
+  core: string;
+  kind: string;
+  prefecture_name: string | null;
+  lg_code: string;
+  /** 都道府県名を付けた名前の本体 (東京都千代田区)。dbt の public_body が作る */
+  prefixed_core: string | null;
+};
+/** 名前 (市区町村は「都道府県名＋名前」も) から機関を引く表と、その名前の最も長い文字数 */
+export type PublicBodies = { byName: Map<string, PublicBody[]>; longest: number };
+
+let cachedBodies: Promise<PublicBodies> | null = null;
+
+/**
+ * 国の機関と地方公共団体の一覧 (約 8,000 件)。isolate の中で 1 回だけ読む。
+ * 失敗したときと空だったときは覚えない (次の問い合わせで読み直す)
+ */
+export const loadPublicBodies = (read: RowReader): Promise<PublicBodies> => {
+  if (cachedBodies) return cachedBodies;
+  const bodies = read<PublicBody>("data/public_body.parquet").then((rows) => {
+    const byName = new Map<string, PublicBody[]>();
+    const add = (key: string, b: PublicBody) => byName.set(key, [...(byName.get(key) ?? []), b]);
+    for (const b of rows) {
+      add(b.core, b);
+      // 市区町村などは都道府県名を付けて書かれることがある (東京都千代田区役所)
+      if (b.prefixed_core) add(b.prefixed_core, b);
+    }
+    return { byName, longest: Math.max(0, ...[...byName.keys()].map((k) => Array.from(k).length)) };
+  });
+  cachedBodies = bodies;
+  const forget = () => {
+    if (cachedBodies === bodies) cachedBodies = null;
+  };
+  bodies.then((b) => b.byName.size === 0 && forget(), forget);
+  return bodies;
+};
+
+/** 入力の先頭と一致した機関と、その名前の文字数 */
+type Parent = { bodies: PublicBody[]; length: number };
+
+/** 入力の商号の本体の先頭と一致する、最も長い名前の機関 (後ろに 1 文字以上残るもの)。無ければ bodies は [] */
+const parentsOf = (core: string, bodies: PublicBodies): Parent => {
+  const chars = Array.from(core);
+  for (let n = Math.min(chars.length - 1, bodies.longest); n > 0; n--) {
+    const hit = bodies.byName.get(chars.slice(0, n).join(""));
+    if (hit) return { bodies: hit, length: n };
+  }
+  return { bodies: [], length: 0 };
+};
+
+/**
+ * 入力の先頭が、機関の名前より長い法人の商号と一致するか (北海道電力札幌支店 → 北海道電力)。
+ * 一致すれば、入力はその法人の支店などで、機関の部局ではない
+ */
+const startsWithCompany = async (
+  core: string,
+  parent: Parent,
+  read: RowReader,
+): Promise<boolean> => {
+  const chars = Array.from(core);
+  const prefixes = Array.from({ length: chars.length - 1 - parent.length }, (_, i) =>
+    chars.slice(0, parent.length + 1 + i).join(""),
+  );
+  // 入力が長いと読むファイルが多くなるので、覚えずに読み捨てる (まとめて照合するときにメモリが積み上がらないように)
+  const hits = await Promise.all(
+    prefixes.map(async (p) => (await read<Row>(exactPath(p), false)).some((r) => r.core === p)),
+  );
+  return hits.some(Boolean);
+};
+
 type Gram = { g: string; df: number | bigint; idf: number; common_id: number | null };
 type Posting = Row & { g: string };
 /** 引く bigram と、全国で読むか */
@@ -110,7 +184,7 @@ const gramPath = (g: string) => `data/gram/${shardOf(g, GRAM_SHARDS)}.parquet`;
 const rarePath = (g: string) => `data/posting_rare/${shardOf(g, RARE_SHARDS)}.parquet`;
 const commonPath = (id: number, bucket: number) => `data/posting_common/${id}/${bucket}.parquet`;
 
-export type Ranked = { p: Row; ed: number; cityOk: boolean };
+export type Ranked = { p: Row; ed: number; cityOk: boolean; label?: string };
 
 /**
  * IDF の合計の上位 COMPARE_TOP 件の法人番号と合計。合計が同じなら商号の編集距離の小さい順
@@ -149,7 +223,7 @@ type Query = {
   core: string;
   cityCodes: ReadonlySet<string>;
   legalOk: (p: Row) => boolean;
-  cityOk: (p: Row) => boolean;
+  cityOk: (p: { lg_code: string }) => boolean;
 };
 
 /** 照合の結果を応答の形にする */
@@ -164,14 +238,14 @@ const answerOf = (
   return {
     status,
     same_name_count: sameCount,
-    candidates: ranked.slice(0, input.limit ?? 5).map(({ p, ed, cityOk }) => ({
+    candidates: ranked.slice(0, input.limit ?? 5).map(({ p, ed, cityOk, label }) => ({
       corporate_number: p.corporate_number,
       name: p.name,
       prefecture: cityOf.get(p.lg_code)?.prefecture_name ?? null,
       city: cityOf.get(p.lg_code)?.city_name ?? null,
       lg_code: p.lg_code,
       evidence: {
-        name: ed > 0 ? `edit(${ed})` : name === p.name ? "exact" : "normalized",
+        name: label ?? (ed > 0 ? `edit(${ed})` : name === p.name ? "exact" : "normalized"),
         legal_form: lf === null ? "missing" : lf === p.legal_form ? "exact" : "mismatch",
         city: !input.address || cityCodes.size === 0 ? "missing" : cityOk ? "exact" : "mismatch",
       },
@@ -277,6 +351,58 @@ const postingsOf = async (
   return (await Promise.all(reads)).flat();
 };
 
+/**
+ * 住所がその機関の場所にあるか。住所の市区町村が分からなければ true。国の機関は場所を問わない。
+ * 市区町村は、住所の市区町村の名前がその名前で始まるとき (札幌市北区は札幌市)。
+ * 都道府県と、一部事務組合などは、住所の都道府県が同じとき
+ */
+const placeOk = (q: Query, cityOf: ReadonlyMap<string, City>, b: PublicBody): boolean => {
+  if (b.kind === "101" || q.cityCodes.size === 0) return true;
+  const cities = [...q.cityCodes].flatMap((c) => cityOf.get(c) ?? []);
+  const isCity = [...cityOf.values()].some(
+    (c) => c.prefecture_name === b.prefecture_name && c.city_name.startsWith(b.name),
+  );
+  return cities.some(
+    (c) => c.prefecture_name === b.prefecture_name && (!isCity || c.city_name.startsWith(b.name)),
+  );
+};
+
+/**
+ * parent_body: 入力に法人格が無く、入力の先頭が国の機関・地方公共団体の名前で後ろに部局の名前が続き
+ * (国土交通省関東地方整備局)、入力の先頭がほかの法人の商号でも、商号の末尾が入力と同じ法人も、1 文字違いの
+ * 商号の法人も無ければ、その機関を返す。同じ名前の機関が複数あれば、住所の市区町村が同じものに絞る。
+ * 1 件なら matched、複数なら ambiguous。parent は forwardMany が求める (無ければ null)
+ */
+const parentAnswer = (
+  q: Query,
+  cityOf: ReadonlyMap<string, City>,
+  parent: Parent | null,
+  ranked: readonly (Ranked & { score: number })[],
+): Answer | null => {
+  if (!parent || parent.bodies.length === 0) return null;
+  const found = parent.bodies;
+  const ids = new Set(found.map((b) => b.corporate_number));
+  const others = ranked.filter((r) => !ids.has(r.p.corporate_number));
+  // 入力が、法人の種類を前に付けた別の法人の商号の末尾 (横浜市立大学 → 公立大学法人横浜市立大学) か、
+  // 誤字なら、その法人を優先する。後ろに続く商号 (横浜市水道局職員厚生会) は部局の中の別の組織なので見ない。
+  // 機関そのもの (茨城県庁 → 茨城県) は 1 文字違いでも見ない
+  if (others.some((r) => r.ed <= 1 || r.p.core.endsWith(q.core))) return null;
+  // 住所が分かるときは、住所がその機関の場所にあるものに絞る。住所が別の場所を指せば matched にしない
+  const inPlace = found.filter((b) => placeOk(q, cityOf, b));
+  const picked = inPlace.length > 0 ? inPlace : found;
+  const parents: Ranked[] = found
+    .map((b) => ({
+      p: { ...b, legal_form: null },
+      ed: 0,
+      cityOk: q.cityCodes.size > 0 && placeOk(q, cityOf, b),
+      label: "parent",
+    }))
+    .sort((a, b) => Number(b.cityOk) - Number(a.cityOk));
+  const status: Status =
+    inPlace.length === 0 ? "candidates" : picked.length === 1 ? "matched" : "ambiguous";
+  return answerOf(q, cityOf, status, picked.length, [...parents, ...others]);
+};
+
 /** bigram の索引で見つけた近い商号を候補に並べた応答 */
 const answerByFuzzy = (
   q: Query,
@@ -284,6 +410,7 @@ const answerByFuzzy = (
   exact: readonly Row[],
   chosen: readonly Chosen[],
   rows: readonly Posting[],
+  parent: Parent | null,
 ): Answer => {
   const idf = new Map(chosen.map((c) => [c.g, c.idf]));
   const nationalGrams = new Set(chosen.filter((c) => c.national).map((c) => c.g));
@@ -323,6 +450,8 @@ const answerByFuzzy = (
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
   const top = ranked[0];
+  const byParent = parentAnswer(q, cityOf, parent, ranked);
+  if (byParent) return byParent;
   const isExact = top !== undefined && top.ed === 0 && top.legal && cityMatches(q, top.p);
   const sameCount = chosen.length > 0 || exact.length > 0 ? sameOf(q, exact).length : null;
   // 商号が同じ条件の法人が 1 件なら matched (ふつうは answerByExact で答えている)、複数なら ambiguous
@@ -347,6 +476,13 @@ export const forwardMany = async (
   off: ReadonlySet<Rule> = new Set(),
 ): Promise<Answer[]> => {
   const queries = inputs.map((input) => queryOf(input, cities, off));
+  // parent_body の候補: 入力に法人格が無く、先頭が機関の名前で、その後ろが法人の商号の続きでないもの
+  const parentOf = async (q: Query): Promise<Parent | null> => {
+    if (!q.on("parent_body") || q.lf !== null) return null;
+    const parent = parentsOf(q.core, await loadPublicBodies(read));
+    if (parent.bodies.length === 0 || (await startsWithCompany(q.core, parent, read))) return null;
+    return parent;
+  };
   const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
   const exact = await Promise.all(
     queries.map(async (q) =>
@@ -361,11 +497,12 @@ export const forwardMany = async (
       for (let i = rest.shift(); i !== undefined; i = rest.shift()) {
         const q = queries[i];
         const chosen = await chooseGrams(q, read);
-        answers[i] = answerByFuzzy(q, cityOf, exact[i], chosen, await postingsOf(q, chosen, read));
+        const rows = await postingsOf(q, chosen, read);
+        answers[i] = answerByFuzzy(q, cityOf, exact[i], chosen, rows, await parentOf(q));
       }
     }),
   );
-  return answers.map((a, i) => a ?? answerByFuzzy(queries[i], cityOf, exact[i], [], []));
+  return answers.map((a, i) => a ?? answerByFuzzy(queries[i], cityOf, exact[i], [], [], null));
 };
 
 /** 1 件の正引き */

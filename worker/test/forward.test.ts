@@ -127,6 +127,75 @@ describe("照合の規則を外したとき (bench/ablate.ts)", () => {
   });
 });
 
+describe("/v1/forward の部局の名前 (parent_body)", () => {
+  it("国の機関の部局は、親の機関に照合する", async () => {
+    const answer = await forward({ name: "国土交通省関東地方整備局" });
+    expect(answer.status).toBe("matched");
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000101",
+      evidence: { name: "parent" },
+    });
+  });
+
+  it("先頭が同じ地方公共団体の名前の会社ではなく、地方公共団体に照合する", async () => {
+    const answer = await forward({ name: "茨城県土浦土木事務所", address: "茨城県土浦市" });
+    expect(answer.status).toBe("matched");
+    expect(answer.candidates[0].corporate_number).toBe("1000000000201");
+  });
+
+  it("都道府県名を付けた市区町村の部局も照合する", async () => {
+    const answer = await forward({ name: "東京都千代田区役所" });
+    expect(answer.candidates[0].corporate_number).toBe("1000000000204");
+  });
+
+  it("同じ名前の地方公共団体は、住所の市区町村で絞る", async () => {
+    const without = await forward({ name: "府中市役所" });
+    expect(without.status).toBe("ambiguous");
+    expect(without.same_name_count).toBe(2);
+    const withAddress = await forward({ name: "府中市役所", address: "広島県府中市府川町" });
+    expect(withAddress.status).toBe("matched");
+    expect(withAddress.candidates[0].corporate_number).toBe("1000000000203");
+  });
+
+  it("商号の末尾が入力と同じ法人があれば、親の機関に寄せない", async () => {
+    const answer = await forward({ name: "茨城県立大学" });
+    expect(answer.candidates[0].corporate_number).toBe("1000000000012");
+    expect(answer.candidates[0].evidence.name).not.toBe("parent");
+  });
+
+  it("入力の先頭がほかの法人の商号なら、その法人の支店などとして親の機関に寄せない", async () => {
+    const answer = await forward({ name: "茨城県交通土浦営業所" });
+    expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
+  });
+
+  it("1 文字違いの商号の法人があれば、誤字として親の機関に寄せない", async () => {
+    const answer = await forward({ name: "府中市場運輪" });
+    expect(answer.candidates[0].corporate_number).toBe("1000000000015");
+  });
+
+  it("機関そのものに部局の名前が付いた入力 (茨城県庁) も、親の機関に照合し、同じ法人を 2 回並べない", async () => {
+    const answer = await forward({ name: "茨城県庁" });
+    expect(answer.status).toBe("matched");
+    expect(answer.candidates[0].corporate_number).toBe("1000000000201");
+    const numbers = answer.candidates.map((c) => c.corporate_number);
+    expect(new Set(numbers).size).toBe(numbers.length);
+  });
+
+  it("住所が親の機関と別の場所を指せば matched にしない", async () => {
+    const answer = await forward({ name: "茨城県土浦土木事務所", address: "大阪府大阪市北区" });
+    expect(answer.status).toBe("candidates");
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000201",
+      evidence: { name: "parent", city: "mismatch" },
+    });
+  });
+
+  it("入力に法人格があれば、親の機関に寄せない", async () => {
+    const answer = await forward({ name: "株式会社茨城県土浦土木" });
+    expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
+  });
+});
+
 const batch = (body: unknown) =>
   app.request(
     "/v1/forward/batch",

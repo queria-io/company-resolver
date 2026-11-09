@@ -42,6 +42,7 @@ GET /v1/reverse?corporate_number=1180301018771
 | `posting_rare` | `data/posting_rare/{shard}.parquet` | 出現する法人が 10,000 以下の bigram ごとの法人（商号・法人格・lg_code つき）。8,192 個 |
 | `posting_common` | `data/posting_common/{common_id}/{bucket}.parquet` | 出現する法人が 10,000 を超える bigram ごとの法人。`bucket` は lg_code を 64 で割った余り |
 | `city` | `data/city.parquet` | 市区町村の lg_code・都道府県名・市区町村名。Worker は isolate の中で 1 回だけ読む |
+| `public_body` | `data/public_body.parquet` | 国の機関と地方公共団体（法人種別 101・201）。部局の名前を親の機関に照合するのに使う。isolate の中で 1 回だけ読む |
 
 正引きは、まず `exact_name` のファイルを 1 つ読み、商号と法人格（住所があれば市区町村も）が一致する法人が 1 件だけなら答える。決まらないときだけ、入力の bigram の `gram` のファイルを読んで出現する法人が少ない 8 個を選び、出現する法人の合計が 10,000 に収まる bigram は `posting_rare` のファイルで全国の行を、残りは住所の市区町村の行だけを読む（共通の bigram は市区町村の区分のファイル）。共通の bigram を全国で読むと 1 件で数十万行になり、Worker のメモリに収まらないので読まない。商号が同じ法人は `exact_name` の行を全国の候補に加える。まとめて照合するときは、商号が同じ法人の表と bigram の出現数のファイルを 1 回だけ読み、近い商号の検索は 1 件ずつ進める。
 
