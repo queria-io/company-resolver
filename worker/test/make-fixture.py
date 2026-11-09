@@ -19,7 +19,7 @@ from pathlib import Path
 import duckdb
 
 ROOT = Path(__file__).resolve().parents[2]
-FORWARD = ["exact_name", "gram", "posting_rare", "posting_common", "city"]
+FORWARD = ["exact_name", "gram", "posting_rare", "posting_common", "city", "public_body"]
 
 FIXTURE = Path(__file__).resolve().parent / "fixture"
 
@@ -32,7 +32,21 @@ COMPANIES = [
     ("1000000000006", "株式会社キヤリアバンク", "東京都", "中央区", "131024"),
     ("1000000000007", "株式会社テスト工業", "東京都", "中央区", "131024"),
     ("1000000000008", "テスト工業株式会社", "大阪府", "大阪市北区", "271276"),
+    # 国の機関と地方公共団体 (部局の名前を親の機関に照合する規則 parent_body を試す)
+    ("1000000000101", "国土交通省", "東京都", "千代田区", "131016"),
+    ("1000000000201", "茨城県", "茨城県", "水戸市", "082015"),
+    ("1000000000202", "府中市", "東京都", "府中市", "132063"),
+    ("1000000000203", "府中市", "広島県", "府中市", "342084"),
+    ("1000000000204", "千代田区", "東京都", "千代田区", "131016"),
+    # 先頭が地方公共団体の名前の会社 (部局の名前をこの会社に寄せない)
+    ("1000000000011", "株式会社茨城県土浦花き市場", "茨城県", "土浦市", "082031"),
+    # 前に法人の種類が付いた、先頭が地方公共団体の名前の法人と、部局の名前の後ろに続く名前の法人
+    ("1000000000012", "公立大学法人茨城県立大学", "茨城県", "水戸市", "082015"),
+    ("1000000000013", "茨城県土浦土木事務所職員会", "茨城県", "土浦市", "082031"),
 ]
+# 法人種別。書いていない法人は 301 (株式会社)
+KINDS = {"1000000000101": "101", "1000000000201": "201", "1000000000202": "201", "1000000000203": "201",
+         "1000000000204": "201"}
 FIRST = date(2015, 10, 5)
 # 履歴。1000000000001 は所在地を 2 回変えた法人、1000000000009 は商号を変えたあと合併で閉鎖した法人
 HISTORY = [
@@ -54,8 +68,8 @@ def source(path: Path) -> None:
         CREATE TABLE h.mart_houjin_bangou (corporate_number VARCHAR, name VARCHAR, furigana VARCHAR, kind VARCHAR,
             prefecture_name VARCHAR, city_name VARCHAR, street_number VARCHAR, lg_code VARCHAR, assignment_date DATE)
     """)
-    con.executemany("INSERT INTO h.mart_houjin_bangou VALUES (?, ?, NULL, '301', ?, ?, '1-1', ?, ?)",
-                    [(*c, FIRST) for c in COMPANIES])
+    con.executemany("INSERT INTO h.mart_houjin_bangou VALUES (?, ?, NULL, ?, ?, ?, '1-1', ?, ?)",
+                    [(c[0], c[1], KINDS.get(c[0], "301"), *c[2:], FIRST) for c in COMPANIES])
     con.execute("""
         CREATE TABLE h.mart_houjin_bangou_history (corporate_number VARCHAR, history_seq BIGINT, is_latest BOOLEAN,
             change_date DATE, name VARCHAR, furigana VARCHAR, kind VARCHAR, prefecture_name VARCHAR, city_name VARCHAR,
