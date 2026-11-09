@@ -115,7 +115,10 @@ export type PublicBodies = { byName: Map<string, PublicBody[]>; longest: number 
 
 let cachedBodies: Promise<PublicBodies> | null = null;
 
-/** 国の機関と地方公共団体の一覧 (約 8,000 件)。isolate の中で 1 回だけ読む */
+/**
+ * 国の機関と地方公共団体の一覧 (約 8,000 件)。isolate の中で 1 回だけ読む。
+ * 失敗したときと空だったときは覚えない (次の問い合わせで読み直す)
+ */
 export const loadPublicBodies = (read: RowReader): Promise<PublicBodies> => {
   if (cachedBodies) return cachedBodies;
   const bodies = read<PublicBody>("data/public_body.parquet").then((rows) => {
@@ -130,9 +133,10 @@ export const loadPublicBodies = (read: RowReader): Promise<PublicBodies> => {
     return { byName, longest: Math.max(0, ...[...byName.keys()].map((k) => Array.from(k).length)) };
   });
   cachedBodies = bodies;
-  bodies.catch(() => {
+  const forget = () => {
     if (cachedBodies === bodies) cachedBodies = null;
-  });
+  };
+  bodies.then((b) => b.byName.size === 0 && forget(), forget);
   return bodies;
 };
 
@@ -162,8 +166,9 @@ const startsWithCompany = async (
   const prefixes = Array.from({ length: chars.length - 1 - parent.length }, (_, i) =>
     chars.slice(0, parent.length + 1 + i).join(""),
   );
+  // 入力が長いと読むファイルが多くなるので、覚えずに読み捨てる (まとめて照合するときにメモリが積み上がらないように)
   const hits = await Promise.all(
-    prefixes.map(async (p) => (await read<Row>(exactPath(p))).some((r) => r.core === p)),
+    prefixes.map(async (p) => (await read<Row>(exactPath(p), false)).some((r) => r.core === p)),
   );
   return hits.some(Boolean);
 };
@@ -452,11 +457,10 @@ export const forwardMany = async (
   off: ReadonlySet<Rule> = new Set(),
 ): Promise<Answer[]> => {
   const queries = inputs.map((input) => queryOf(input, cities, off));
-  const bodies = loadPublicBodies(read);
   // parent_body の候補: 入力に法人格が無く、先頭が機関の名前で、その後ろが法人の商号の続きでないもの
   const parentOf = async (q: Query): Promise<Parent | null> => {
     if (!q.on("parent_body") || q.lf !== null) return null;
-    const parent = parentsOf(q.core, await bodies);
+    const parent = parentsOf(q.core, await loadPublicBodies(read));
     if (parent.bodies.length === 0 || (await startsWithCompany(q.core, parent, read))) return null;
     return parent;
   };
