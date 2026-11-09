@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Queria Company Resolver（法人名寄せツール）。企業名・住所・電話番号・URL から法人番号を照合する。照合の規則と応答の形は [DESIGN.md](DESIGN.md) が正。
+Queria Company Resolver（法人名寄せ API）。企業名・住所・電話番号・URL から法人番号を照合する。照合の規則と応答の形は [DESIGN.md](DESIGN.md) が正。
 
 - 直下: Worker が読む索引を作る dbt のデータセット（Queria の `company_resolver`）。法人番号のデータセットを読み、毎月 `.github/workflows/sync.yml` が作り直す（`scripts/build.sh` で dbt を流して fdl commit）。Sync で main が進むと、Workers Builds の deploy hook で Worker をビルドし直し、正引きの表を静的アセットに置く（`worker/scripts/build-data.mjs`）
 - `worker/`: Cloudflare Workers の API。正引きは静的アセットのファイルを丸ごと読む。逆引きは DuckLake のカタログを読まず、FDL の `refs/heads/main` が指すバージョンの Parquet を直接読む
