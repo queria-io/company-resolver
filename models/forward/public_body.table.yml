@@ -27,3 +27,6 @@ fields:
   - name: lg_code
     title: 全国地方公共団体コード
     description: "本店所在地の市区町村"
+  - name: prefixed_core
+    title: 都道府県名を付けた名前の本体
+    description: "地方公共団体で、名前が都道府県名で始まらないもの (例: 東京都千代田区)。それ以外は NULL"

@@ -19,3 +19,5 @@ models:
         data_type: varchar
       - name: lg_code
         data_type: varchar
+      - name: prefixed_core
+        data_type: varchar

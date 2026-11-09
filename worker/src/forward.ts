@@ -109,6 +109,8 @@ type PublicBody = {
   kind: string;
   prefecture_name: string | null;
   lg_code: string;
+  /** 都道府県名を付けた名前の本体 (東京都千代田区)。dbt の public_body が作る */
+  prefixed_core: string | null;
 };
 /** 名前 (市区町村は「都道府県名＋名前」も) から機関を引く表と、その名前の最も長い文字数 */
 export type PublicBodies = { byName: Map<string, PublicBody[]>; longest: number };
@@ -127,8 +129,7 @@ export const loadPublicBodies = (read: RowReader): Promise<PublicBodies> => {
     for (const b of rows) {
       add(b.core, b);
       // 市区町村などは都道府県名を付けて書かれることがある (東京都千代田区役所)
-      const pref = b.prefecture_name ? coreName(nfkc(b.prefecture_name)) : "";
-      if (pref && !b.core.startsWith(pref)) add(pref + b.core, b);
+      if (b.prefixed_core) add(b.prefixed_core, b);
     }
     return { byName, longest: Math.max(0, ...[...byName.keys()].map((k) => Array.from(k).length)) };
   });
@@ -351,6 +352,22 @@ const postingsOf = async (
 };
 
 /**
+ * 住所がその機関の場所にあるか。住所の市区町村が分からなければ true。国の機関は場所を問わない。
+ * 市区町村は、住所の市区町村の名前がその名前で始まるとき (札幌市北区は札幌市)。
+ * 都道府県と、一部事務組合などは、住所の都道府県が同じとき
+ */
+const placeOk = (q: Query, cityOf: ReadonlyMap<string, City>, b: PublicBody): boolean => {
+  if (b.kind === "101" || q.cityCodes.size === 0) return true;
+  const cities = [...q.cityCodes].flatMap((c) => cityOf.get(c) ?? []);
+  const isCity = [...cityOf.values()].some(
+    (c) => c.prefecture_name === b.prefecture_name && c.city_name.startsWith(b.name),
+  );
+  return cities.some(
+    (c) => c.prefecture_name === b.prefecture_name && (!isCity || c.city_name.startsWith(b.name)),
+  );
+};
+
+/**
  * parent_body: 入力に法人格が無く、入力の先頭が国の機関・地方公共団体の名前で後ろに部局の名前が続き
  * (国土交通省関東地方整備局)、入力の先頭がほかの法人の商号でも、商号の末尾が入力と同じ法人も、1 文字違いの
  * 商号の法人も無ければ、その機関を返す。同じ名前の機関が複数あれば、住所の市区町村が同じものに絞る。
@@ -370,17 +387,19 @@ const parentAnswer = (
   // 誤字なら、その法人を優先する。後ろに続く商号 (横浜市水道局職員厚生会) は部局の中の別の組織なので見ない。
   // 機関そのもの (茨城県庁 → 茨城県) は 1 文字違いでも見ない
   if (others.some((r) => r.ed <= 1 || r.p.core.endsWith(q.core))) return null;
-  const inCity = found.filter((b) => q.cityOk(b));
-  const picked = inCity.length > 0 ? inCity : found;
+  // 住所が分かるときは、住所がその機関の場所にあるものに絞る。住所が別の場所を指せば matched にしない
+  const inPlace = found.filter((b) => placeOk(q, cityOf, b));
+  const picked = inPlace.length > 0 ? inPlace : found;
   const parents: Ranked[] = found
     .map((b) => ({
       p: { ...b, legal_form: null },
       ed: 0,
-      cityOk: q.cityOk(b),
+      cityOk: q.cityCodes.size > 0 && placeOk(q, cityOf, b),
       label: "parent",
     }))
     .sort((a, b) => Number(b.cityOk) - Number(a.cityOk));
-  const status: Status = picked.length === 1 ? "matched" : "ambiguous";
+  const status: Status =
+    inPlace.length === 0 ? "candidates" : picked.length === 1 ? "matched" : "ambiguous";
   return answerOf(q, cityOf, status, picked.length, [...parents, ...others]);
 };
 

@@ -181,6 +181,15 @@ describe("/v1/forward の部局の名前 (parent_body)", () => {
     expect(new Set(numbers).size).toBe(numbers.length);
   });
 
+  it("住所が親の機関と別の場所を指せば matched にしない", async () => {
+    const answer = await forward({ name: "茨城県土浦土木事務所", address: "大阪府大阪市北区" });
+    expect(answer.status).toBe("candidates");
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000201",
+      evidence: { name: "parent", city: "mismatch" },
+    });
+  });
+
   it("入力に法人格があれば、親の機関に寄せない", async () => {
     const answer = await forward({ name: "株式会社茨城県土浦土木" });
     expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
