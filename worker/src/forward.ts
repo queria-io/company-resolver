@@ -136,14 +136,36 @@ export const loadPublicBodies = (read: RowReader): Promise<PublicBodies> => {
   return bodies;
 };
 
-/** 入力の商号の本体の先頭と一致する、最も長い名前の機関 (後ろに 1 文字以上残るもの)。無ければ [] */
-const parentsOf = (core: string, bodies: PublicBodies): PublicBody[] => {
+/** 入力の先頭と一致した機関と、その名前の文字数 */
+type Parent = { bodies: PublicBody[]; length: number };
+
+/** 入力の商号の本体の先頭と一致する、最も長い名前の機関 (後ろに 1 文字以上残るもの)。無ければ bodies は [] */
+const parentsOf = (core: string, bodies: PublicBodies): Parent => {
   const chars = Array.from(core);
   for (let n = Math.min(chars.length - 1, bodies.longest); n > 0; n--) {
     const hit = bodies.byName.get(chars.slice(0, n).join(""));
-    if (hit) return hit;
+    if (hit) return { bodies: hit, length: n };
   }
-  return [];
+  return { bodies: [], length: 0 };
+};
+
+/**
+ * 入力の先頭が、機関の名前より長い法人の商号と一致するか (北海道電力札幌支店 → 北海道電力)。
+ * 一致すれば、入力はその法人の支店などで、機関の部局ではない
+ */
+const startsWithCompany = async (
+  core: string,
+  parent: Parent,
+  read: RowReader,
+): Promise<boolean> => {
+  const chars = Array.from(core);
+  const prefixes = Array.from({ length: chars.length - 1 - parent.length }, (_, i) =>
+    chars.slice(0, parent.length + 1 + i).join(""),
+  );
+  const hits = await Promise.all(
+    prefixes.map(async (p) => (await read<Row>(exactPath(p))).some((r) => r.core === p)),
+  );
+  return hits.some(Boolean);
 };
 
 type Gram = { g: string; df: number | bigint; idf: number; common_id: number | null };
@@ -325,21 +347,24 @@ const postingsOf = async (
 
 /**
  * parent_body: 入力に法人格が無く、入力の先頭が国の機関・地方公共団体の名前で後ろに部局の名前が続き
- * (国土交通省関東地方整備局)、商号の末尾が入力と同じ法人も、1 文字違いの商号の法人も無ければ、その機関を返す。
- * 同じ名前の機関が複数あれば、住所の市区町村が同じものに絞る。1 件なら matched、複数なら ambiguous
+ * (国土交通省関東地方整備局)、入力の先頭がほかの法人の商号でも、商号の末尾が入力と同じ法人も、1 文字違いの
+ * 商号の法人も無ければ、その機関を返す。同じ名前の機関が複数あれば、住所の市区町村が同じものに絞る。
+ * 1 件なら matched、複数なら ambiguous。parent は forwardMany が求める (無ければ null)
  */
 const parentAnswer = (
   q: Query,
   cityOf: ReadonlyMap<string, City>,
-  bodies: PublicBodies,
+  parent: Parent | null,
   ranked: readonly (Ranked & { score: number })[],
 ): Answer | null => {
-  if (!q.on("parent_body") || q.lf !== null) return null;
-  const found = parentsOf(q.core, bodies);
-  if (found.length === 0) return null;
+  if (!parent || parent.bodies.length === 0) return null;
+  const found = parent.bodies;
+  const ids = new Set(found.map((b) => b.corporate_number));
+  const others = ranked.filter((r) => !ids.has(r.p.corporate_number));
   // 入力が、法人の種類を前に付けた別の法人の商号の末尾 (横浜市立大学 → 公立大学法人横浜市立大学) か、
-  // 誤字なら、その法人を優先する。後ろに続く商号 (横浜市水道局職員厚生会) は部局の中の別の組織なので見ない
-  if (ranked.some((r) => r.ed <= 1 || r.p.core.endsWith(q.core))) return null;
+  // 誤字なら、その法人を優先する。後ろに続く商号 (横浜市水道局職員厚生会) は部局の中の別の組織なので見ない。
+  // 機関そのもの (茨城県庁 → 茨城県) は 1 文字違いでも見ない
+  if (others.some((r) => r.ed <= 1 || r.p.core.endsWith(q.core))) return null;
   const inCity = found.filter((b) => q.cityOk(b));
   const picked = inCity.length > 0 ? inCity : found;
   const parents: Ranked[] = found
@@ -351,7 +376,7 @@ const parentAnswer = (
     }))
     .sort((a, b) => Number(b.cityOk) - Number(a.cityOk));
   const status: Status = picked.length === 1 ? "matched" : "ambiguous";
-  return answerOf(q, cityOf, status, picked.length, [...parents, ...ranked]);
+  return answerOf(q, cityOf, status, picked.length, [...parents, ...others]);
 };
 
 /** bigram の索引で見つけた近い商号を候補に並べた応答 */
@@ -361,7 +386,7 @@ const answerByFuzzy = (
   exact: readonly Row[],
   chosen: readonly Chosen[],
   rows: readonly Posting[],
-  bodies: PublicBodies,
+  parent: Parent | null,
 ): Answer => {
   const idf = new Map(chosen.map((c) => [c.g, c.idf]));
   const nationalGrams = new Set(chosen.filter((c) => c.national).map((c) => c.g));
@@ -401,8 +426,8 @@ const answerByFuzzy = (
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
   const top = ranked[0];
-  const parent = parentAnswer(q, cityOf, bodies, ranked);
-  if (parent) return parent;
+  const byParent = parentAnswer(q, cityOf, parent, ranked);
+  if (byParent) return byParent;
   const isExact = top !== undefined && top.ed === 0 && top.legal && cityMatches(q, top.p);
   const sameCount = chosen.length > 0 || exact.length > 0 ? sameOf(q, exact).length : null;
   // 商号が同じ条件の法人が 1 件なら matched (ふつうは answerByExact で答えている)、複数なら ambiguous
@@ -428,6 +453,13 @@ export const forwardMany = async (
 ): Promise<Answer[]> => {
   const queries = inputs.map((input) => queryOf(input, cities, off));
   const bodies = loadPublicBodies(read);
+  // parent_body の候補: 入力に法人格が無く、先頭が機関の名前で、その後ろが法人の商号の続きでないもの
+  const parentOf = async (q: Query): Promise<Parent | null> => {
+    if (!q.on("parent_body") || q.lf !== null) return null;
+    const parent = parentsOf(q.core, await bodies);
+    if (parent.bodies.length === 0 || (await startsWithCompany(q.core, parent, read))) return null;
+    return parent;
+  };
   const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
   const exact = await Promise.all(
     queries.map(async (q) =>
@@ -443,12 +475,11 @@ export const forwardMany = async (
         const q = queries[i];
         const chosen = await chooseGrams(q, read);
         const rows = await postingsOf(q, chosen, read);
-        answers[i] = answerByFuzzy(q, cityOf, exact[i], chosen, rows, await bodies);
+        answers[i] = answerByFuzzy(q, cityOf, exact[i], chosen, rows, await parentOf(q));
       }
     }),
   );
-  const empty = { byName: new Map(), longest: 0 };
-  return answers.map((a, i) => a ?? answerByFuzzy(queries[i], cityOf, exact[i], [], [], empty));
+  return answers.map((a, i) => a ?? answerByFuzzy(queries[i], cityOf, exact[i], [], [], null));
 };
 
 /** 1 件の正引き */
