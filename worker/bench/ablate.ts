@@ -12,7 +12,9 @@ import { evaluate, loadLocalCities, localFiles, readQueries, type Result } from 
 const files = localFiles(join(import.meta.dirname, "../public"));
 const cities = await loadLocalCities(files);
 const args = process.argv.slice(2);
-const only = args[0] === "--rules" ? new Set(args[1].split(",")) : null;
+const only = args[0] === "--rules" ? new Set((args[1] ?? "").split(",")) : null;
+const unknown = [...(only ?? [])].filter((r) => !(RULES as readonly string[]).includes(r));
+if (unknown.length > 0) throw new Error(`unknown rules: ${unknown.join(",")} (${RULES.join(",")})`);
 const rules = RULES.filter((r) => !only || only.has(r));
 const sets = args
   .slice(only ? 2 : 0)

@@ -217,9 +217,9 @@ const answerByExact = (
   exact: readonly Row[],
 ): Answer | null => {
   // exact_first: 商号が同じ法人で 1 件に決まれば、bigram の索引を引かずに答える
-  if (!q.on("exact_first") || sameOf(q, exact).length !== 1) return null;
-  // 一致とみなした法人を先頭に、商号が同じで法人格や市区町村が違う法人も後ろの候補に並べる
   const same = new Set(sameOf(q, exact));
+  if (!q.on("exact_first") || same.size !== 1) return null;
+  // 一致とみなした法人を先頭に、商号が同じで法人格や市区町村が違う法人も後ろの候補に並べる
   const ranked = exact
     .map((p) => ({ p, ed: 0, cityOk: q.cityOk(p) }))
     .sort(
