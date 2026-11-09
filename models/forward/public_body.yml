@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: public_body
+    description: |
+      国の機関と地方公共団体の一覧です。部局の名前（例: 国土交通省関東地方整備局）を、親の機関の法人番号に照合するのに使います。
+      「国税庁法人番号公表サイト」（国税庁）（https://www.houjin-bangou.nta.go.jp/）を加工して作成。
+    access: public
+    columns:
+      - name: corporate_number
+        data_type: varchar
+      - name: name
+        data_type: varchar
+      - name: core
+        data_type: varchar
+      - name: kind
+        data_type: varchar
+      - name: prefecture_name
+        data_type: varchar
+      - name: lg_code
+        data_type: varchar

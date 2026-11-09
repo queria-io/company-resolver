@@ -1,0 +1,29 @@
+schema: forward
+name: public_body
+title: 国の機関と地方公共団体
+description: |-
+  国の機関と地方公共団体の一覧です。部局の名前（例: 国土交通省関東地方整備局）を、親の機関の法人番号に照合するのに使います。
+
+  - 法人種別が 101（国の機関）と 201（地方公共団体）の現存する法人です
+keywords:
+  - 法人番号
+sources:
+  - path: https://www.houjin-bangou.nta.go.jp/
+fields:
+  - name: corporate_number
+    title: 法人番号
+    description: "13 桁"
+  - name: name
+    title: 名前
+    description: "NFKC で正規化した名前"
+  - name: core
+    title: 名前の本体
+    description: "商号の本体と同じ規則で正規化した名前"
+  - name: kind
+    title: 法人種別
+    description: "101 は国の機関、201 は地方公共団体"
+  - name: prefecture_name
+    title: 都道府県名
+  - name: lg_code
+    title: 全国地方公共団体コード
+    description: "本店所在地の市区町村"
