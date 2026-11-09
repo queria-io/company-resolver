@@ -4,7 +4,7 @@ usage (リポジトリの直下で): uv run python worker/test/make-fixture.py
 
 本番と同じ dbt のモデルを、法人番号のデータセットの代わりに手元のカタログ (下の架空の法人) に向けて流す。
 - 逆引き: Parquet と、そのファイルの一覧 test/fixture/manifest.json (Worker は目録から読む。src/source.ts)
-- 正引き: 静的アセットに置くファイル test/fixture/assets/ (本番と同じく scripts/build-data.mjs が置く)
+- 正引き: 静的アセットに置くファイル test/fixture/assets/ (本番と同じく scripts/build-data.mjs が分けて置く)
 法人は架空のもの。並びと規則を試すために、同じ商号を別の市区町村に置いている
 """
 import json
@@ -19,7 +19,6 @@ from pathlib import Path
 import duckdb
 
 ROOT = Path(__file__).resolve().parents[2]
-FORWARD = ["exact_name", "gram", "posting_rare", "posting_common", "city", "public_body"]
 
 FIXTURE = Path(__file__).resolve().parent / "fixture"
 
@@ -104,28 +103,20 @@ def main() -> None:
         con = duckdb.connect()
         con.execute(f"ATTACH 'ducklake:sqlite:{tmp}/work.sqlite' AS c (READ_ONLY)")
         write_manifest(con)
+        con.close()
         subprocess.run(
-            ["node", "scripts/build-data.mjs", "--manifest", str(FIXTURE / "manifest.json"), str(FIXTURE / "assets")],
+            ["node", "scripts/build-data.mjs", "--catalog", f"ducklake:sqlite:{tmp}/work.sqlite", str(FIXTURE / "assets")],
             cwd=ROOT / "worker", check=True,
         )
+        # 正引きの表は assets/ に分けて置いたので、dbt が書いたファイルは残さない
         shutil.rmtree(FIXTURE / "forward")
-        # 正引きのファイルは assets/ にあるので、目録には逆引きだけを残す
-        manifest = json.loads((FIXTURE / "manifest.json").read_text())
-        manifest["tables"] = {"reverse.company": manifest["tables"]["reverse.company"]}
-        (FIXTURE / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 def write_manifest(con: duckdb.DuckDBPyConnection) -> None:
-    """表のファイルの一覧 (FIXTURE からの相対パス) を書く"""
-    def files(schema: str, table: str) -> list[str]:
-        rows = con.execute(
-            "SELECT data_file FROM ducklake_list_files('c', ?, schema => ?)", [table, schema]
-        ).fetchall()
-        return sorted(Path(f).resolve().relative_to(FIXTURE.resolve()).as_posix() for (f,) in rows)
-
-    tables = {"reverse.company": files("reverse", "company")}
-    tables.update({f"forward.{t}": files("forward", t) for t in FORWARD})
-    manifest = {"version": "local", "tables": tables}
+    """逆引きの表のファイルの一覧 (FIXTURE からの相対パス) を書く"""
+    rows = con.execute("SELECT data_file FROM ducklake_list_files('c', 'company', schema => 'reverse')").fetchall()
+    paths = sorted(Path(f).resolve().relative_to(FIXTURE.resolve()).as_posix() for (f,) in rows)
+    manifest = {"version": "local", "tables": {"reverse.company": paths}}
     (FIXTURE / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 

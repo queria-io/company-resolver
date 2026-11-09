@@ -33,7 +33,7 @@ GET /v1/reverse?corporate_number=1180301018771
 
 ### 正引き（静的アセット）
 
-`pnpm build:data`（`scripts/build-data.mjs`）が、FDL の `refs/heads/main` が指すバージョンの `forward` の表のファイルを `public/data/` に置き、Worker と一緒にデプロイする。静的アセットはファイルを丸ごとしか読めないので、dbt の表はパーティションごとに 1 つのファイルにしてあり、置き場所はパーティションの値で決まる（Worker は目録を読まずにパスを組み立てる）。分ける数は `../dbt_project.yml` の `vars` と `src/forward.ts` で揃える。
+`pnpm build:data`（`scripts/build-data.mjs`）が、FDL の `refs/heads/main` が指すバージョンの `forward` の表を DuckDB で読み、`shard` などの列でファイルに分けて `public/data/` に置き、Worker と一緒にデプロイする。静的アセットはファイルを丸ごとしか読めないので、1 件の検索で読むファイルを小さくするために分ける。dbt の表は分けずに書く（毎月の Sync で上げるファイルを少なくする）。置き場所は列の値で決まる（Worker は目録を読まずにパスを組み立てる）。分ける数は `../dbt_project.yml` の `vars` と `src/forward.ts` で揃える。
 
 | 表 | 置き場所 | 中身 |
 |---|---|---|
