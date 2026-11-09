@@ -59,6 +59,7 @@ pnpm test        # vitest (Workers ランタイム)。索引は test/fixture/ (�
 pnpm typecheck
 pnpm check       # oxlint + oxfmt --check
 pnpm tsx bench/run.ts <queries.jsonl>   # 手元の public/data/ で正解率と読んだファイル・処理時間を計測 (手順は ../BENCHMARK.md)
+pnpm tsx bench/ablate.ts <queries.jsonl>...   # 照合の規則を 1 つずつ外して、精度の変わり方を計測 (規則は ../DESIGN.md)
 node bench/latency.mjs https://company-resolver.queria.io   # 手元から API の応答時間を計測
 ```
 

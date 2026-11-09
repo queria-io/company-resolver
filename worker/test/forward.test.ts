@@ -1,6 +1,8 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import { assetFiles, rowReader } from "../src/assets";
+import { forward as forwardOf, loadCities, type Rule } from "../src/forward";
 import app from "../src/index";
 import type { Answer } from "../src/forward";
 
@@ -103,6 +105,25 @@ describe("/v1/forward", () => {
     const exact = await rowsRead({ name: "株式会社クエリア", address: "東京都千代田区" });
     const fuzzy = await rowsRead({ name: "株式会社クエア", address: "東京都千代田区" });
     expect(exact).toBeLessThan(fuzzy);
+  });
+});
+
+describe("照合の規則を外したとき (bench/ablate.ts)", () => {
+  const run = async (name: string, address: string, off: Rule[]) => {
+    const read = rowReader(assetFiles(env.ASSETS), { reads: 0, bytes: 0 });
+    return forwardOf(read, await loadCities(read), { name, address }, new Set(off));
+  };
+
+  it("exact_first を外しても、近い商号の検索で同じ条件の法人が 1 件なら matched", async () => {
+    const answer = await run("株式会社クエリア", "東京都千代田区紀尾井町1-3", ["exact_first"]);
+    expect(answer.status).toBe("matched");
+    expect(answer.candidates[0].corporate_number).toBe("1000000000001");
+  });
+
+  it("city_match を外しても、matched の法人を 1 位に並べる", async () => {
+    const legal = await run("有限会社クエリア", "東京都千代田区", ["city_match"]);
+    expect(legal.status).toBe("matched");
+    expect(legal.candidates[0].corporate_number).toBe("1000000000005");
   });
 });
 
