@@ -20,10 +20,12 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: queria-io/dataset-shared/.github/workflows/sync.yml@main
+    uses: queria-io/dataset-shared/.github/workflows/sync.yml@fe59be721647d5b1bbffe1ef3eb2d318c81be3f3
     with:
       dataset_name: company_resolver
-    secrets: inherit
+    secrets:
+      QUERIA_TOKEN: ${{ secrets.QUERIA_TOKEN }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
   # 正引きの索引は Worker の静的アセットに入る (worker/scripts/build-data.mjs)。Sync で main が進んだら、
   # Workers Builds の deploy hook で Worker をビルドし直してデプロイする
