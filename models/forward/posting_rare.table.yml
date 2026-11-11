@@ -3,16 +3,11 @@ name: posting_rare
 title: bigram 索引（出現が少ないもの）
 description: |-
   出現する法人が 10,000 以下の bigram ごとの法人の一覧です。商号を 2 文字ずつに分けた並び（bigram）で、近い商号の法人を検索するのに使います。
-
-  - shard ごとにファイルを分けています
 keywords:
   - 法人番号
 sources:
   - path: https://www.houjin-bangou.nta.go.jp/
 fields:
-  - name: shard
-    title: ファイルの番号
-    description: "bigram の文字のコードポイントの和を 8,192 で割った余り"
   - name: g
     title: bigram
   - name: lg_code

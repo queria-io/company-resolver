@@ -16,14 +16,12 @@ clean-targets:
 # 行グループの大きさはスキーマに付ける (dbt は __dbt_tmp に書いてから改名するので、テーブルに付けても効かない)。
 # 大きさは DuckDB が並列に書く単位 (122,880 行) を割り切るものにする。DuckDB はベクトル (2,048 行) より
 # 小さい行グループを書かないので、2,048 行が最小
-# 正引きの索引の分け方。dbt は分ける列 (shard など) を作り、worker/scripts/build-data.mjs がその列でファイルに分ける。
+# 正引きの索引の分け方。dbt は posting_common を分ける列 (common_id・bucket) を作り、worker/scripts/build-data.mjs が
+# その列でファイルに分ける (exact_name・gram・posting_rare の shard は build-data.mjs が作る)。
 # worker/src/forward.ts の同じ名前の値と揃える
 vars:
   # 出現する法人がこれを超える bigram を共通の bigram とする。全国で読む行の上限と同じ値
   forward_national_rows: 10000
-  forward_name_shards: 8192
-  forward_gram_shards: 1024
-  forward_rare_shards: 8192
   forward_city_buckets: 64
 
 models:

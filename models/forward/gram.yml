@@ -7,8 +7,6 @@ models:
       「国税庁法人番号公表サイト」（国税庁）（https://www.houjin-bangou.nta.go.jp/）を加工して作成。
     access: public
     columns:
-      - name: shard
-        data_type: integer
       - name: g
         data_type: varchar
       - name: df

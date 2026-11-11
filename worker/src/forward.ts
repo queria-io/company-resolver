@@ -10,7 +10,7 @@ const NATIONAL_ROWS = 10_000;
 const FUZZY_CONCURRENCY = 1;
 /** 編集距離で比べる候補の数 (全国と、住所の市区町村の中から、それぞれ) */
 const COMPARE_TOP = 100;
-/** 索引のファイルの分け方。dbt_project.yml の vars と同じ値にする */
+/** 索引のファイルの分け方。shard の数は scripts/build-data.mjs の TABLES、区分の数は dbt_project.yml の vars と同じ値にする */
 const NAME_SHARDS = 8192;
 const GRAM_SHARDS = 1024;
 const RARE_SHARDS = 8192;

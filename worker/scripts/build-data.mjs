@@ -13,11 +13,24 @@ import { fileURLToPath } from "node:url";
 
 import { DuckDBInstance } from "@duckdb/node-api";
 
-/** 表と、ファイルを分ける列 (並べる列)。分けない表は 1 つのファイル */
+/**
+ * 表と、ファイルを分ける列 (並べる列)。分けない表は 1 つのファイル。shard を持つ表は、key の列から shard の列を
+ * ここで作る (n 個に分ける)。src/forward.ts の同じ表の値と揃える
+ */
 const TABLES = [
-  { name: "exact_name", by: ["shard"], order: "shard, core, lg_code, corporate_number" },
-  { name: "gram", by: ["shard"], order: "shard, g" },
-  { name: "posting_rare", by: ["shard"], order: "shard, g, lg_code, corporate_number" },
+  {
+    name: "exact_name",
+    shard: { key: "core", n: 8192 },
+    by: ["shard"],
+    order: "shard, core, lg_code, corporate_number",
+  },
+  { name: "gram", shard: { key: "g", n: 1024 }, by: ["shard"], order: "shard, g" },
+  {
+    name: "posting_rare",
+    shard: { key: "g", n: 8192 },
+    by: ["shard"],
+    order: "shard, g, lg_code, corporate_number",
+  },
   {
     name: "posting_common",
     by: ["common_id", "bucket"],
@@ -31,6 +44,11 @@ const TABLES = [
 const MAX_BYTES = 25 * 1024 * 1024;
 /** 1 回のデプロイに置けるファイルの数の上限 (Workers Paid)。ほかのファイルの分を残す */
 const MAX_FILES = 95_000;
+
+/** shard の番号を作る SQL。src/normalize.ts の shardOf と同じ値になる */
+const shardSql = ({ key, n }) =>
+  `CAST(list_reduce([unicode(substr(${key}, i, 1)) FOR i IN range(1, length(${key}) + 1)], ` +
+  `lambda h, x: (h * 131 + x) % ${n}, 0) AS INTEGER)`;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -108,7 +126,12 @@ for (const t of TABLES) {
     if (t.optional) continue;
     throw new Error(`forward.${t.name} is not in ${source.version}`);
   }
-  const query = `SELECT * FROM c.forward.${t.name} ORDER BY ${t.order}`;
+  // shard は dbt の表に持たせず、ここで作る (分け方を Worker と同じデプロイで変えられるように)。
+  // shard の列を持つ前のバージョンの表から作るときも、その列は使わない
+  const columns = t.shard
+    ? `COLUMNS(lambda col: col <> 'shard'), ${shardSql(t.shard)} AS shard`
+    : "*";
+  const query = `SELECT ${columns} FROM c.forward.${t.name} ORDER BY ${t.order}`;
   if (t.by.length === 0) {
     await con.run(
       `COPY (${query}) TO '${join(out, `${t.name}.parquet`)}' (FORMAT parquet, COMPRESSION zstd)`,

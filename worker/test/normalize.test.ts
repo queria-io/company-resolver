@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { bigrams, coreName, legalForm, levenshtein, nfkc } from "../src/normalize";
+import { bigrams, coreName, legalForm, levenshtein, nfkc, shardOf } from "../src/normalize";
 
 describe("normalize", () => {
   it("法人格を分けて商号の本体を取る", () => {
@@ -23,6 +23,13 @@ describe("normalize", () => {
     expect(bigrams("ABAB")).toEqual(["AB", "BA"]);
     expect(bigrams("A")).toEqual(["A"]);
     expect(bigrams("")).toEqual([]);
+  });
+
+  it("shard は文字の並びで決まり、英字の bigram も離れた番号に分かれる", () => {
+    // scripts/build-data.mjs の shardSql と同じ値 (コードポイントの和だと 146・159・163 に集まる)
+    expect(["FL", "OP", "PS"].map((g) => shardOf(g, 8192))).toEqual([1054, 2237, 2371]);
+    expect(shardOf("AB", 8192)).not.toBe(shardOf("BA", 8192));
+    expect(shardOf("", 8192)).toBe(0);
   });
 
   it("編集距離は文字単位", () => {

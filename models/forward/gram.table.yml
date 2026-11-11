@@ -8,9 +8,6 @@ keywords:
 sources:
   - path: https://www.houjin-bangou.nta.go.jp/
 fields:
-  - name: shard
-    title: ファイルの番号
-    description: "bigram の文字のコードポイントの和を 1,024 で割った余り"
   - name: g
     title: bigram
   - name: df
