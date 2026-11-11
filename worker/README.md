@@ -33,11 +33,11 @@ GET /v1/reverse?corporate_number=1180301018771
 
 ### 正引き（静的アセット）
 
-`pnpm build:data`（`scripts/build-data.mjs`）が、FDL の `refs/heads/main` が指すバージョンの `forward` の表を DuckDB で読み、`shard` などの列でファイルに分けて `public/data/` に置き、Worker と一緒にデプロイする。静的アセットはファイルを丸ごとしか読めないので、1 件の検索で読むファイルを小さくするために分ける。dbt の表は分けずに書く（毎月の Sync で上げるファイルを少なくする）。置き場所は列の値で決まる（Worker は目録を読まずにパスを組み立てる）。分ける数は `../dbt_project.yml` の `vars` と `src/forward.ts` で揃える。
+`pnpm build:data`（`scripts/build-data.mjs`）が、FDL の `refs/heads/main` が指すバージョンの `forward` の表を DuckDB で読み、`shard` などの列でファイルに分けて `public/data/` に置き、Worker と一緒にデプロイする。静的アセットはファイルを丸ごとしか読めないので、1 件の検索で読むファイルを小さくするために分ける。dbt の表は分けずに書く（毎月の Sync で上げるファイルを少なくする）。置き場所は列の値で決まる（Worker は目録を読まずにパスを組み立てる）。`exact_name`・`gram`・`posting_rare` の `shard` は `build-data.mjs` が作る（文字のコードポイントを先頭から `h = (h * 131 + コードポイント) % n` で畳んだ値。`src/normalize.ts` の `shardOf` と同じ）。分ける数は `build-data.mjs` の `TABLES`・`../dbt_project.yml` の `vars` と `src/forward.ts` で揃える。
 
 | 表 | 置き場所 | 中身 |
 |---|---|---|
-| `exact_name` | `data/exact_name/{shard}.parquet` | 商号の本体ごとの法人（商号・法人格・lg_code）。商号の本体のコードポイントの和を 8,192 で割った余り |
+| `exact_name` | `data/exact_name/{shard}.parquet` | 商号の本体ごとの法人（商号・法人格・lg_code）。8,192 個 |
 | `gram` | `data/gram/{shard}.parquet` | bigram ごとの出現する法人の数（df）・IDF・共通の bigram の番号（`common_id`）。1,024 個 |
 | `posting_rare` | `data/posting_rare/{shard}.parquet` | 出現する法人が 10,000 以下の bigram ごとの法人（商号・法人格・lg_code つき）。8,192 個 |
 | `posting_common` | `data/posting_common/{common_id}/{bucket}.parquet` | 出現する法人が 10,000 を超える bigram ごとの法人。`bucket` は lg_code を 64 で割った余り |
