@@ -29,7 +29,7 @@ export const RULES = [
   "city_search",
   "city_rank",
   "same_name_candidates",
-  "parent_body",
+  "prefix_owner",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -154,24 +154,30 @@ const parentsOf = (core: string, bodies: PublicBodies): Parent => {
   return { bodies: [], length: 0 };
 };
 
+/** prefix_owner で、入力の先頭と商号が一致した法人の最短の文字数 */
+const MIN_OWNER_PREFIX = 2;
+
+/** 入力の先頭と一致した持ち主: 国の機関・地方公共団体か、商号が一致した法人 */
+type Owner = { kind: "body"; parent: Parent } | { kind: "company"; rows: Row[] };
+
 /**
- * 入力の先頭が、機関の名前より長い法人の商号と一致するか (北海道電力札幌支店 → 北海道電力)。
- * 一致すれば、入力はその法人の支店などで、機関の部局ではない
+ * prefix_owner の持ち主: 入力の先頭と一致する最も長い名前の法人か機関 (後ろに 1 文字以上残るもの)。
+ * 機関の名前より長い先頭だけを、長い順に商号が同じ法人の表で確かめ、最初に見つかったところで止める
  */
-const startsWithCompany = async (
+const ownerOf = async (
   core: string,
-  parent: Parent,
+  bodies: PublicBodies,
   read: RowReader,
-): Promise<boolean> => {
+): Promise<Owner | null> => {
+  const parent = parentsOf(core, bodies);
   const chars = Array.from(core);
-  const prefixes = Array.from({ length: chars.length - 1 - parent.length }, (_, i) =>
-    chars.slice(0, parent.length + 1 + i).join(""),
-  );
-  // 入力が長いと読むファイルが多くなるので、覚えずに読み捨てる (まとめて照合するときにメモリが積み上がらないように)
-  const hits = await Promise.all(
-    prefixes.map(async (p) => (await read<Row>(exactPath(p), false)).some((r) => r.core === p)),
-  );
-  return hits.some(Boolean);
+  for (let n = chars.length - 1; n > Math.max(parent.length, MIN_OWNER_PREFIX - 1); n--) {
+    const prefix = chars.slice(0, n).join("");
+    // 入力ごとに違うファイルなので、覚えずに読み捨てる
+    const rows = (await read<Row>(exactPath(prefix), false)).filter((r) => r.core === prefix);
+    if (rows.length > 0) return { kind: "company", rows };
+  }
+  return parent.bodies.length > 0 ? { kind: "body", parent } : null;
 };
 
 type Gram = { g: string; df: number | bigint; idf: number; common_id: number | null };
@@ -368,18 +374,16 @@ const placeOk = (q: Query, cityOf: ReadonlyMap<string, City>, b: PublicBody): bo
 };
 
 /**
- * parent_body: 入力に法人格が無く、入力の先頭が国の機関・地方公共団体の名前で後ろに部局の名前が続き
- * (国土交通省関東地方整備局)、入力の先頭がほかの法人の商号でも、商号の末尾が入力と同じ法人も、1 文字違いの
- * 商号の法人も無ければ、その機関を返す。同じ名前の機関が複数あれば、住所の市区町村が同じものに絞る。
- * 1 件なら matched、複数なら ambiguous。parent は forwardMany が求める (無ければ null)
+ * prefix_owner (機関): 入力の先頭が国の機関・地方公共団体の名前で後ろに部局の名前が続き (国土交通省関東地方整備局)、
+ * 入力の全体に近い商号の法人が無ければ、その機関を返す。同じ名前の機関が複数あれば、住所の場所にあるものに絞る。
+ * 1 件なら matched、複数なら ambiguous
  */
 const parentAnswer = (
   q: Query,
   cityOf: ReadonlyMap<string, City>,
-  parent: Parent | null,
-  ranked: readonly (Ranked & { score: number })[],
+  parent: Parent,
+  ranked: readonly Ranked[],
 ): Answer | null => {
-  if (!parent || parent.bodies.length === 0) return null;
   const found = parent.bodies;
   const ids = new Set(found.map((b) => b.corporate_number));
   const others = ranked.filter((r) => !ids.has(r.p.corporate_number));
@@ -403,6 +407,31 @@ const parentAnswer = (
   return answerOf(q, cityOf, status, picked.length, [...parents, ...others]);
 };
 
+/**
+ * prefix_owner (法人): 入力の先頭が法人の商号で後ろに文字が続き (北海道電力札幌支店)、入力の全体に近い商号の
+ * 法人が無ければ、その法人を候補の先頭に並べる。先頭の一致は略称 (北海道電力NW) や今は無い子会社の名前でも
+ * 起きるので、matched にはしない。住所の市区町村が分かれば、その市区町村の法人を先に並べる
+ */
+const companyOwnerAnswer = (
+  q: Query,
+  cityOf: ReadonlyMap<string, City>,
+  owners: readonly Row[],
+  ranked: readonly Ranked[],
+  sameCount: number | null,
+): Answer | null => {
+  const ids = new Set(owners.map((p) => p.corporate_number));
+  const others = ranked.filter((r) => !ids.has(r.p.corporate_number));
+  if (others.some((r) => r.ed <= 1 || r.p.core.endsWith(q.core))) return null;
+  const firsts: Ranked[] = owners
+    .map((p) => ({ p, ed: 0, cityOk: q.cityOk(p), label: "parent" }))
+    .sort(
+      (a, b) =>
+        Number(b.cityOk) - Number(a.cityOk) ||
+        a.p.corporate_number.localeCompare(b.p.corporate_number),
+    );
+  return answerOf(q, cityOf, "candidates", sameCount, [...firsts, ...others]);
+};
+
 /** bigram の索引で見つけた近い商号を候補に並べた応答 */
 const answerByFuzzy = (
   q: Query,
@@ -410,7 +439,7 @@ const answerByFuzzy = (
   exact: readonly Row[],
   chosen: readonly Chosen[],
   rows: readonly Posting[],
-  parent: Parent | null,
+  owner: Owner | null,
 ): Answer => {
   const idf = new Map(chosen.map((c) => [c.g, c.idf]));
   const nationalGrams = new Set(chosen.filter((c) => c.national).map((c) => c.g));
@@ -450,10 +479,15 @@ const answerByFuzzy = (
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
   const top = ranked[0];
-  const byParent = parentAnswer(q, cityOf, parent, ranked);
-  if (byParent) return byParent;
-  const isExact = top !== undefined && top.ed === 0 && top.legal && cityMatches(q, top.p);
   const sameCount = chosen.length > 0 || exact.length > 0 ? sameOf(q, exact).length : null;
+  const byOwner =
+    owner === null
+      ? null
+      : owner.kind === "body"
+        ? parentAnswer(q, cityOf, owner.parent, ranked)
+        : companyOwnerAnswer(q, cityOf, owner.rows, ranked, sameCount);
+  if (byOwner) return byOwner;
+  const isExact = top !== undefined && top.ed === 0 && top.legal && cityMatches(q, top.p);
   // 商号が同じ条件の法人が 1 件なら matched (ふつうは answerByExact で答えている)、複数なら ambiguous
   const status: Status = isExact
     ? sameCount === 1
@@ -476,12 +510,10 @@ export const forwardMany = async (
   off: ReadonlySet<Rule> = new Set(),
 ): Promise<Answer[]> => {
   const queries = inputs.map((input) => queryOf(input, cities, off));
-  // parent_body の候補: 入力に法人格が無く、先頭が機関の名前で、その後ろが法人の商号の続きでないもの
-  const parentOf = async (q: Query): Promise<Parent | null> => {
-    if (!q.on("parent_body") || q.lf !== null) return null;
-    const parent = parentsOf(q.core, await loadPublicBodies(read));
-    if (parent.bodies.length === 0 || (await startsWithCompany(q.core, parent, read))) return null;
-    return parent;
+  // prefix_owner の候補: 入力に法人格が無く、先頭が法人の商号か機関の名前のもの
+  const ownerOfQuery = async (q: Query): Promise<Owner | null> => {
+    if (!q.on("prefix_owner") || q.lf !== null) return null;
+    return ownerOf(q.core, await loadPublicBodies(read), read);
   };
   const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
   const exact = await Promise.all(
@@ -498,7 +530,7 @@ export const forwardMany = async (
         const q = queries[i];
         const chosen = await chooseGrams(q, read);
         const rows = await postingsOf(q, chosen, read);
-        answers[i] = answerByFuzzy(q, cityOf, exact[i], chosen, rows, await parentOf(q));
+        answers[i] = answerByFuzzy(q, cityOf, exact[i], chosen, rows, await ownerOfQuery(q));
       }
     }),
   );
