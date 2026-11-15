@@ -5,7 +5,7 @@ WITH b AS (
     SELECT c.corporate_number, c.name, {{ core_name('c.name') }} AS core, h.kind, c.prefecture_name, c.lg_code,
         {{ core_name('c.prefecture_name') }} AS prefecture_core
     FROM {{ ref('company_name') }} c
-    JOIN houjin_bangou.main.mart_houjin_bangou h USING (corporate_number)
+    JOIN {{ ref('stg_houjin_bangou_kind') }} h USING (corporate_number)
     WHERE h.kind IN ('101', '201')
 )
 SELECT corporate_number, name, core, kind, prefecture_name, lg_code,

@@ -36,12 +36,20 @@ models:
     # 列でファイルに分けて静的アセットに置く (静的アセットは丸ごとしか読めないので、1 件の検索で読むファイルを小さくする)
     forward:
       +schema: forward
+      # 他のデータセットの表を読む stg。ビューにすると利用者の手元に無いカタログを指し、
+      # テーブルにすると同じ行を 2 重に持つので、ephemeral にする
+      stg:
+        +materialized: ephemeral
       +pre-hook:
         - "CREATE SCHEMA IF NOT EXISTS company_resolver.forward"
         - "CALL company_resolver.set_option('parquet_compression', 'zstd', schema => 'forward')"
     # 逆引き (/v1/reverse)。法人番号の下 3 桁 (shard) ごとにファイルを分ける
     reverse:
       +schema: reverse
+      # 他のデータセットの表を読む stg。ビューにすると利用者の手元に無いカタログを指し、
+      # テーブルにすると同じ行を 2 重に持つので、ephemeral にする
+      stg:
+        +materialized: ephemeral
       +pre-hook:
         - "CREATE SCHEMA IF NOT EXISTS company_resolver.reverse"
         - "CALL company_resolver.set_option('parquet_row_group_size', 2048, schema => 'reverse')"

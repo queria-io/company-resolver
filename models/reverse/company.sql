@@ -8,7 +8,7 @@ WITH h AS (
         lag(city_name) OVER w AS prev_city,
         lag(street_number) OVER w AS prev_street_number,
         lag(lg_code) OVER w AS prev_lg_code
-    FROM houjin_bangou.main.mart_houjin_bangou_history
+    FROM {{ ref('stg_houjin_bangou_history') }}
     WINDOW w AS (PARTITION BY corporate_number ORDER BY history_seq)
 ),
 former_names AS (
