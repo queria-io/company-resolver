@@ -1,7 +1,7 @@
 """EDINET の提出者から、bench/run.ts に渡す問い合わせ (JSONL) を作る。
 
 usage (リポジトリの直下で): uv run python worker/bench/make-queries.py <edinet.parquet> <out_dir>
-out_dir に clean.jsonl (正しい名前＋住所) と typo.jsonl (誤字あり＋住所) を書く。
+out_dir に clean.jsonl (正しい名前＋住所)、typo.jsonl (誤字あり＋住所)、bare.jsonl (法人格を外した名前＋住所)、bare-typo.jsonl (法人格を外した誤字あり＋住所) を書く。
 正規化の規則は dbt のマクロ (macros/normalize.sql) をそのまま使う
 """
 import json
@@ -32,7 +32,11 @@ def load_queries(con: duckdb.DuckDBPyConnection, edinet: str) -> None:
                CASE WHEN length(core) >= 3
                     THEN coalesce(replace(replace(replace(lf, '株式会社', '(株)'), '有限会社', '(有)'), '合同会社', '(同)'), '')
                          || core[1:(CAST(truth AS BIGINT) % length(core))::int] || core[(CAST(truth AS BIGINT) % length(core))::int + 2:]
-                    ELSE name END AS typo_name
+                    ELSE name END AS typo_name,
+               CASE WHEN lf IS NULL THEN name ELSE trim(replace(name, lf, '')) END AS bare_name,
+               CASE WHEN length(core) >= 3
+                    THEN core[1:(CAST(truth AS BIGINT) % length(core))::int] || core[(CAST(truth AS BIGINT) % length(core))::int + 2:]
+                    ELSE core END AS bare_typo_name
         FROM e
     """)
 
@@ -40,7 +44,7 @@ def load_queries(con: duckdb.DuckDBPyConnection, edinet: str) -> None:
 def main(edinet: str, out: str) -> None:
     con = duckdb.connect()
     load_queries(con, edinet)
-    for label, col in (("clean", "name"), ("typo", "typo_name")):
+    for label, col in (("clean", "name"), ("typo", "typo_name"), ("bare", "bare_name"), ("bare-typo", "bare_typo_name")):
         rows = con.execute(f"SELECT truth, {col}, address FROM query ORDER BY qid").fetchall()
         with open(Path(out) / f"{label}.jsonl", "w") as f:
             for truth, name, address in rows:

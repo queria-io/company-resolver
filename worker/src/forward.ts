@@ -29,7 +29,7 @@ export const RULES = [
   "city_search",
   "city_rank",
   "same_name_candidates",
-  "parent_body",
+  "prefix_owner",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -154,24 +154,47 @@ const parentsOf = (core: string, bodies: PublicBodies): Parent => {
   return { bodies: [], length: 0 };
 };
 
+/** prefix_owner で確かめる先頭の長さ (法人の商号の本体の文字数)。3 文字以下の商号は略称の先頭とも一致する (ソニー損保 → ソニー) */
+const MIN_OWNER_PREFIX = 4;
+const MAX_OWNER_PREFIX = 50;
+/** prefix_owner で、先頭の長さを何通りずつまとめて確かめるか */
+const OWNER_BATCH = 8;
+/** 同じ商号の法人がこれより多い商号は、ありふれた商号として持ち主にしない */
+const MAX_OWNERS = 3;
+
+/** 入力の先頭と一致した持ち主: 機関の名前より長く一致した法人 (無ければ null) と、一致した機関 (無ければ bodies は []) */
+type Owner = { company: Row[] | null; parent: Parent };
+
 /**
- * 入力の先頭が、機関の名前より長い法人の商号と一致するか (北海道電力札幌支店 → 北海道電力)。
- * 一致すれば、入力はその法人の支店などで、機関の部局ではない
+ * prefix_owner の持ち主: 入力の先頭と一致する最も長い名前の法人か機関 (後ろに 1 文字以上残るもの)。
+ * 機関の名前より長い先頭を、長い順に OWNER_BATCH 通りずつ商号が同じ法人の表で確かめ、見つかったところで止める
  */
-const startsWithCompany = async (
+const ownerOf = async (
   core: string,
-  parent: Parent,
+  bodies: PublicBodies,
   read: RowReader,
-): Promise<boolean> => {
+): Promise<Owner | null> => {
+  const parent = parentsOf(core, bodies);
   const chars = Array.from(core);
-  const prefixes = Array.from({ length: chars.length - 1 - parent.length }, (_, i) =>
-    chars.slice(0, parent.length + 1 + i).join(""),
-  );
-  // 入力が長いと読むファイルが多くなるので、覚えずに読み捨てる (まとめて照合するときにメモリが積み上がらないように)
-  const hits = await Promise.all(
-    prefixes.map(async (p) => (await read<Row>(exactPath(p), false)).some((r) => r.core === p)),
-  );
-  return hits.some(Boolean);
+  const lengths: number[] = [];
+  for (
+    let n = Math.min(chars.length - 1, MAX_OWNER_PREFIX);
+    n > parent.length && n >= MIN_OWNER_PREFIX;
+    n--
+  )
+    lengths.push(n);
+  for (let k = 0; k < lengths.length; k += OWNER_BATCH) {
+    const found = await Promise.all(
+      lengths.slice(k, k + OWNER_BATCH).map(async (n) => {
+        const prefix = chars.slice(0, n).join("");
+        // 入力ごとに違うファイルなので、覚えずに読み捨てる
+        return (await read<Row>(exactPath(prefix), false)).filter((r) => r.core === prefix);
+      }),
+    );
+    const rows = found.find((r) => r.length > 0);
+    if (rows) return { company: rows, parent };
+  }
+  return parent.bodies.length > 0 ? { company: null, parent } : null;
 };
 
 type Gram = { g: string; df: number | bigint; idf: number; common_id: number | null };
@@ -368,29 +391,56 @@ const placeOk = (q: Query, cityOf: ReadonlyMap<string, City>, b: PublicBody): bo
 };
 
 /**
- * parent_body: 入力に法人格が無く、入力の先頭が国の機関・地方公共団体の名前で後ろに部局の名前が続き
- * (国土交通省関東地方整備局)、入力の先頭がほかの法人の商号でも、商号の末尾が入力と同じ法人も、1 文字違いの
- * 商号の法人も無ければ、その機関を返す。同じ名前の機関が複数あれば、住所の市区町村が同じものに絞る。
- * 1 件なら matched、複数なら ambiguous。parent は forwardMany が求める (無ければ null)
+ * prefix_owner: 入力の先頭と一致した持ち主 (ownerOf) を候補の先頭に並べた応答。入力の全体と商号が同じ法人か、
+ * 入力の全体に近い商号の法人があれば null (その法人を優先する)。
+ * 入力が、法人の種類を前に付けた別の法人の商号の末尾 (横浜市立大学 → 公立大学法人横浜市立大学) か、誤字のときに
+ * あたる。後ろに続く商号 (横浜市水道局職員厚生会) は部局の中の別の組織なので見ない。持ち主そのもの
+ * (茨城県庁 → 茨城県) は 1 文字違いでも見ない
  */
-const parentAnswer = (
+const ownerAnswer = (
   q: Query,
   cityOf: ReadonlyMap<string, City>,
-  parent: Parent | null,
-  ranked: readonly (Ranked & { score: number })[],
+  owner: Owner,
+  exact: readonly Row[],
+  ranked: readonly Ranked[],
 ): Answer | null => {
-  if (!parent || parent.bodies.length === 0) return null;
-  const found = parent.bodies;
-  const ids = new Set(found.map((b) => b.corporate_number));
-  const others = ranked.filter((r) => !ids.has(r.p.corporate_number));
-  // 入力が、法人の種類を前に付けた別の法人の商号の末尾 (横浜市立大学 → 公立大学法人横浜市立大学) か、
-  // 誤字なら、その法人を優先する。後ろに続く商号 (横浜市水道局職員厚生会) は部局の中の別の組織なので見ない。
-  // 機関そのもの (茨城県庁 → 茨城県) は 1 文字違いでも見ない
-  if (others.some((r) => r.ed <= 1 || r.p.core.endsWith(q.core))) return null;
-  // 住所が分かるときは、住所がその機関の場所にあるものに絞る。住所が別の場所を指せば matched にしない
-  const inPlace = found.filter((b) => placeOk(q, cityOf, b));
-  const picked = inPlace.length > 0 ? inPlace : found;
-  const parents: Ranked[] = found
+  if (exact.length > 0) return null;
+  /** 持ち主を除いた候補。入力の全体に近い商号の法人があれば null */
+  const othersOf = (owners: readonly { corporate_number: string }[]): Ranked[] | null => {
+    const ids = new Set(owners.map((p) => p.corporate_number));
+    const others = ranked.filter((r) => !ids.has(r.p.corporate_number));
+    return others.some((r) => r.ed <= 1 || r.p.core.endsWith(q.core)) ? null : others;
+  };
+  // 法人: 先頭の一致は略称 (北海道電力NW) や今は無い子会社の名前でも起きるので、matched にせず候補の先頭に並べる。
+  // 近い商号を読めていない (ranked が空) ときは、入力の全体に近い法人が無いことを確かめられないので並べない。
+  // 同じ商号の法人が多いありふれた商号も並べない。このときも機関には戻らない (入力は機関の部局ではなく、
+  // 機関の名前で始まる法人の支店などなので、機関に matched にすると誤る)
+  const owners = owner.company;
+  if (owners !== null) {
+    if (ranked.length === 0 || owners.length > MAX_OWNERS) return null;
+    const others = othersOf(owners);
+    if (others === null) return null;
+    // 持ち主の商号で始まる別の法人が、持ち主の後ろの文字数より少ない編集で入力に届くなら、入力はその法人の
+    // 誤字と読める (茨城県交通サビース → 茨城県交通サービス)。持ち主を先頭に並べない
+    const rest = Array.from(q.core).length - Array.from(owners[0].core).length;
+    if (others.some((r) => r.p.core.startsWith(owners[0].core) && r.ed < rest)) return null;
+    const firsts: Ranked[] = owners
+      .map((p) => ({ p, ed: 0, cityOk: q.cityOk(p), label: "parent" }))
+      .sort(
+        (a, b) =>
+          Number(b.cityOk) - Number(a.cityOk) ||
+          a.p.corporate_number.localeCompare(b.p.corporate_number),
+      );
+    return answerOf(q, cityOf, "candidates", sameOf(q, exact).length, [...firsts, ...others]);
+  }
+  // 機関: 住所が分かるときは、住所がその機関の場所にあるものに絞る。住所が別の場所を指せば matched にしない
+  const bodies = owner.parent.bodies;
+  if (bodies.length === 0) return null;
+  const others = othersOf(bodies);
+  if (others === null) return null;
+  const inPlace = bodies.filter((b) => placeOk(q, cityOf, b));
+  const picked = inPlace.length > 0 ? inPlace : bodies;
+  const parents: Ranked[] = bodies
     .map((b) => ({
       p: { ...b, legal_form: null },
       ed: 0,
@@ -410,7 +460,7 @@ const answerByFuzzy = (
   exact: readonly Row[],
   chosen: readonly Chosen[],
   rows: readonly Posting[],
-  parent: Parent | null,
+  owner: Owner | null,
 ): Answer => {
   const idf = new Map(chosen.map((c) => [c.g, c.idf]));
   const nationalGrams = new Set(chosen.filter((c) => c.national).map((c) => c.g));
@@ -450,10 +500,10 @@ const answerByFuzzy = (
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
   const top = ranked[0];
-  const byParent = parentAnswer(q, cityOf, parent, ranked);
-  if (byParent) return byParent;
-  const isExact = top !== undefined && top.ed === 0 && top.legal && cityMatches(q, top.p);
   const sameCount = chosen.length > 0 || exact.length > 0 ? sameOf(q, exact).length : null;
+  const byOwner = owner === null ? null : ownerAnswer(q, cityOf, owner, exact, ranked);
+  if (byOwner) return byOwner;
+  const isExact = top !== undefined && top.ed === 0 && top.legal && cityMatches(q, top.p);
   // 商号が同じ条件の法人が 1 件なら matched (ふつうは answerByExact で答えている)、複数なら ambiguous
   const status: Status = isExact
     ? sameCount === 1
@@ -476,12 +526,11 @@ export const forwardMany = async (
   off: ReadonlySet<Rule> = new Set(),
 ): Promise<Answer[]> => {
   const queries = inputs.map((input) => queryOf(input, cities, off));
-  // parent_body の候補: 入力に法人格が無く、先頭が機関の名前で、その後ろが法人の商号の続きでないもの
-  const parentOf = async (q: Query): Promise<Parent | null> => {
-    if (!q.on("parent_body") || q.lf !== null) return null;
-    const parent = parentsOf(q.core, await loadPublicBodies(read));
-    if (parent.bodies.length === 0 || (await startsWithCompany(q.core, parent, read))) return null;
-    return parent;
+  // prefix_owner の候補: 入力に法人格が無く、先頭が法人の商号か機関の名前のもの。
+  // 入力の全体と商号が同じ法人があれば ownerAnswer は使わないので、先頭の商号のファイルを読まない
+  const ownerOfQuery = async (q: Query, exact: readonly Row[]): Promise<Owner | null> => {
+    if (!q.on("prefix_owner") || q.lf !== null || exact.length > 0) return null;
+    return ownerOf(q.core, await loadPublicBodies(read), read);
   };
   const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
   const exact = await Promise.all(
@@ -496,9 +545,15 @@ export const forwardMany = async (
     Array.from({ length: FUZZY_CONCURRENCY }, async () => {
       for (let i = rest.shift(); i !== undefined; i = rest.shift()) {
         const q = queries[i];
-        const chosen = await chooseGrams(q, read);
-        const rows = await postingsOf(q, chosen, read);
-        answers[i] = answerByFuzzy(q, cityOf, exact[i], chosen, rows, await parentOf(q));
+        // 先頭の持ち主は bigram の索引と関係なく求まるので、並べて読む
+        const [{ chosen, rows }, owner] = await Promise.all([
+          chooseGrams(q, read).then(async (chosen) => ({
+            chosen,
+            rows: await postingsOf(q, chosen, read),
+          })),
+          ownerOfQuery(q, exact[i]),
+        ]);
+        answers[i] = answerByFuzzy(q, cityOf, exact[i], chosen, rows, owner);
       }
     }),
   );

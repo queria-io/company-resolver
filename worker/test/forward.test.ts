@@ -127,7 +127,7 @@ describe("照合の規則を外したとき (bench/ablate.ts)", () => {
   });
 });
 
-describe("/v1/forward の部局の名前 (parent_body)", () => {
+describe("/v1/forward の先頭が法人・機関の名前の入力 (prefix_owner)", () => {
   it("国の機関の部局は、親の機関に照合する", async () => {
     const answer = await forward({ name: "国土交通省関東地方整備局" });
     expect(answer.status).toBe("matched");
@@ -157,18 +157,53 @@ describe("/v1/forward の部局の名前 (parent_body)", () => {
     expect(withAddress.candidates[0].corporate_number).toBe("1000000000203");
   });
 
-  it("商号の末尾が入力と同じ法人があれば、親の機関に寄せない", async () => {
+  it("商号の末尾が入力と同じ法人があれば、先頭の機関に寄せない", async () => {
     const answer = await forward({ name: "茨城県立大学" });
     expect(answer.candidates[0].corporate_number).toBe("1000000000012");
     expect(answer.candidates[0].evidence.name).not.toBe("parent");
   });
 
-  it("入力の先頭がほかの法人の商号なら、その法人の支店などとして親の機関に寄せない", async () => {
+  it("入力の先頭が機関の名前より長い法人の商号なら、その法人を候補の先頭に並べ、matched にはしない", async () => {
     const answer = await forward({ name: "茨城県交通土浦営業所" });
+    expect(answer.status).toBe("candidates");
+    expect(answer.same_name_count).toBe(0);
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000014",
+      evidence: { name: "parent" },
+    });
+    expect(answer.candidates.map((c) => c.corporate_number)).not.toContain("1000000000201");
+  });
+
+  it("同じ商号の法人が多いありふれた商号は、先頭の持ち主にしない", async () => {
+    const answer = await forward({ name: "クエリアテスト工業" });
+    expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
+    // 住所の市区町村の中では 1 件でも、同じ商号の法人の数は全国で数える
+    const withAddress = await forward({ name: "クエリアテスト工業", address: "東京都千代田区" });
+    expect(withAddress.candidates.map((c) => c.evidence.name)).not.toContain("parent");
+  });
+
+  it("先頭が別の法人の商号と一致する法人 (子会社) は、その法人自身に照合する", async () => {
+    const answer = await forward({ name: "茨城県交通サービス" });
+    expect(answer.status).toBe("matched");
+    expect(answer.candidates[0].corporate_number).toBe("1000000000016");
+  });
+
+  it("持ち主の商号で始まる別の法人の誤字と読めるなら、持ち主を先頭に並べない", async () => {
+    const answer = await forward({ name: "茨城県交通サビース" });
+    expect(answer.candidates[0].corporate_number).toBe("1000000000016");
     expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
   });
 
-  it("1 文字違いの商号の法人があれば、誤字として親の機関に寄せない", async () => {
+  it("子会社の支店の名前は、最も長く一致した子会社を先頭に並べる", async () => {
+    const answer = await forward({ name: "茨城県交通サービス水戸支店" });
+    expect(answer.status).toBe("candidates");
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000016",
+      evidence: { name: "parent" },
+    });
+  });
+
+  it("1 文字違いの商号の法人があれば、誤字として先頭の法人・機関に寄せない", async () => {
     const answer = await forward({ name: "府中市場運輪" });
     expect(answer.candidates[0].corporate_number).toBe("1000000000015");
   });
@@ -190,7 +225,7 @@ describe("/v1/forward の部局の名前 (parent_body)", () => {
     });
   });
 
-  it("入力に法人格があれば、親の機関に寄せない", async () => {
+  it("入力に法人格があれば、先頭の法人・機関に寄せない", async () => {
     const answer = await forward({ name: "株式会社茨城県土浦土木" });
     expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
   });
