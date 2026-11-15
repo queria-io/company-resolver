@@ -173,6 +173,11 @@ describe("/v1/forward の先頭が法人・機関の名前の入力 (prefix_owne
     expect(answer.candidates.map((c) => c.corporate_number)).not.toContain("1000000000201");
   });
 
+  it("同じ商号の法人が多いありふれた商号は、先頭の持ち主にしない", async () => {
+    const answer = await forward({ name: "クエリアテスト工業" });
+    expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
+  });
+
   it("先頭が別の法人の商号と一致する法人 (子会社) は、その法人自身に照合する", async () => {
     const answer = await forward({ name: "茨城県交通サービス" });
     expect(answer.status).toBe("matched");

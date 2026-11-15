@@ -37,7 +37,7 @@ const TABLES = [
     order: "common_id, bucket, lg_code, corporate_number",
   },
   { name: "city", by: [], order: "lg_code" },
-  // 部局の名前の照合 (prefix_owner) に使う。表の無いバージョンでは置かず、Worker はこの規則を使わない
+  // 規則 prefix_owner の機関の側に使う。表の無いバージョンでは置かず、Worker は機関を先頭の持ち主にしない
   { name: "public_body", by: [], order: "corporate_number", optional: true },
 ];
 /** 静的アセットの 1 ファイルの上限 */
