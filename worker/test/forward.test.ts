@@ -166,6 +166,7 @@ describe("/v1/forward の先頭が法人・機関の名前の入力 (prefix_owne
   it("入力の先頭が機関の名前より長い法人の商号なら、その法人を候補の先頭に並べ、matched にはしない", async () => {
     const answer = await forward({ name: "茨城県交通土浦営業所" });
     expect(answer.status).toBe("candidates");
+    expect(answer.same_name_count).toBe(0);
     expect(answer.candidates[0]).toMatchObject({
       corporate_number: "1000000000014",
       evidence: { name: "parent" },
@@ -176,12 +177,21 @@ describe("/v1/forward の先頭が法人・機関の名前の入力 (prefix_owne
   it("同じ商号の法人が多いありふれた商号は、先頭の持ち主にしない", async () => {
     const answer = await forward({ name: "クエリアテスト工業" });
     expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
+    // 住所の市区町村の中では 1 件でも、同じ商号の法人の数は全国で数える
+    const withAddress = await forward({ name: "クエリアテスト工業", address: "東京都千代田区" });
+    expect(withAddress.candidates.map((c) => c.evidence.name)).not.toContain("parent");
   });
 
   it("先頭が別の法人の商号と一致する法人 (子会社) は、その法人自身に照合する", async () => {
     const answer = await forward({ name: "茨城県交通サービス" });
     expect(answer.status).toBe("matched");
     expect(answer.candidates[0].corporate_number).toBe("1000000000016");
+  });
+
+  it("持ち主の商号で始まる別の法人の誤字と読めるなら、持ち主を先頭に並べない", async () => {
+    const answer = await forward({ name: "茨城県交通サビース" });
+    expect(answer.candidates[0].corporate_number).toBe("1000000000016");
+    expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
   });
 
   it("子会社の支店の名前は、最も長く一致した子会社を先頭に並べる", async () => {
