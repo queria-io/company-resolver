@@ -52,7 +52,7 @@ const shardSql = ({ key, n }) =>
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** FDL のリポジトリの main が指すバージョンの、ATTACH するカタログとバージョン */
+/** FDL のリポジトリの main が指すバージョンの、ATTACH するメタデータとバージョン */
 const fromRepository = async (repo) => {
   const get = async (path) => {
     for (let i = 0; ; i++) {
@@ -68,8 +68,10 @@ const fromRepository = async (repo) => {
   };
   const id = (await get("refs/heads/main")).trim();
   const record = JSON.parse(await get(`versions/${id}/version.json`));
+  // version.json が記録するメタデータの名前 (fdl 0.26 までは catalog の項目に ducklake.duckdb)
+  const metadata = (record.metadata ?? record.catalog).path;
   return {
-    catalog: `ducklake:${repo}versions/${id}/ducklake.duckdb`,
+    catalog: `ducklake:${repo}versions/${id}/${metadata}`,
     version: id,
     createdAt: record.created_at,
   };
