@@ -28,7 +28,7 @@ company_resolver:
             # 既定のままだと小さいテーブルがカタログの中に収まり parquet が生成されない
             DATA_INLINING_ROW_LIMIT: 0
         # 元にする法人番号のデータセット。読むだけ。テストの索引 (worker/test/make-fixture.py) は手元のカタログに差し替える
-        - path: "{{ env_var('HOUJIN_BANGOU', 'ducklake:https://data.queria.io/datasets/queria/houjin_bangou/ducklake.duckdb') }}"
+        - path: "{{ env_var('HOUJIN_BANGOU', 'ducklake:https://data.queria.io/datasets/queria/houjin_bangou/metadata.db') }}"
           alias: houjin_bangou
           is_ducklake: true
           read_only: true

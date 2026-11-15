@@ -20,7 +20,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: queria-io/dataset-shared/.github/workflows/sync.yml@67443c88b6ec355559c91bf866239e10073ccf83
+    uses: queria-io/dataset-shared/.github/workflows/sync.yml@31f8766209fc198967cf2b4cfa186a400434acdd
     with:
       dataset_name: company_resolver
     secrets:
