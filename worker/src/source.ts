@@ -63,7 +63,7 @@ const load = async (bucket: R2Bucket, source: string): Promise<Index> => {
   const config = JSON.parse(await getText(bucket, `${source}fdl.json`)) as { data_dir?: string };
   const id = (await getText(bucket, `${source}refs/heads/main`)).trim();
   const list = JSON.parse(await getText(bucket, `${source}versions/${id}/files.json`)) as FileList;
-  return fromFileList(source + (config.data_dir ?? "data/"), id, list);
+  return fromFileList(source + (config.data_dir ?? "tables/"), id, list);
 };
 
 /** 読む先を覚えておく時間。Sync のあと、遅くともこれだけたてば新しいバージョンを読む */
