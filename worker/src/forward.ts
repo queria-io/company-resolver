@@ -1,4 +1,4 @@
-// 企業名と住所から法人番号の候補を返す。規則は DESIGN.md、索引は models/forward/ の dbt のモデルを静的アセットに置いたもの
+// 企業名と住所から法人番号の候補を返す。規則は DESIGN.md、索引は models/forward/mart/ の dbt のモデルを静的アセットに置いたもの
 import { type RowReader } from "./assets";
 import { bigrams, cityBucket, coreName, legalForm, levenshtein, nfkc, shardOf } from "./normalize";
 

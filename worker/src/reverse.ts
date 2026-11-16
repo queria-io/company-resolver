@@ -1,4 +1,4 @@
-// 法人番号から法人を返す。索引は models/reverse/company.sql の dbt のモデル
+// 法人番号から法人を返す。索引は models/reverse/mart/company.sql の dbt のモデル
 import { columnStats, openFile, readGroups, type ReadLog } from "./parquet";
 import { type Index, shardFiles } from "./source";
 
