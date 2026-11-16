@@ -1,5 +1,6 @@
-schema: forward
-name: company_name
+---
+$schema: https://queria.io/schemas/table/v1.json
+table: forward.company_name
 title: 法人の商号（正規化済み）
 description: |-
   現存する法人の商号を NFKC で正規化したものと、本店所在地の市区町村です。正引きの索引の元になります。
@@ -21,3 +22,4 @@ fields:
   - name: lg_code
     title: 全国地方公共団体コード
     description: "6 桁（検査数字あり）"
+---

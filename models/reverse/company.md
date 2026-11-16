@@ -1,5 +1,6 @@
-schema: reverse
-name: company
+---
+$schema: https://queria.io/schemas/table/v1.json
+table: reverse.company
 title: 法人の状態と変更履歴
 description: |-
   法人ごとの最新の状態です。登記記録が閉鎖した法人も含み、旧商号と旧所在地を持ちます。
@@ -48,3 +49,4 @@ fields:
   - name: former_addresses
     title: 旧所在地
     description: "古い順。until はその所在地でなくなった日"
+---

@@ -1,5 +1,6 @@
-schema: forward
-name: exact_name
+---
+$schema: https://queria.io/schemas/table/v1.json
+table: forward.exact_name
 title: 商号が同じ法人
 description: |-
   正規化した商号の本体ごとの法人の一覧です。法人格と空白・中黒・ハイフン類を除き、英字を大文字に、小書きの仮名を大きい仮名に正規化した商号の本体で、同じ商号の法人を引くのに使います。
@@ -22,3 +23,4 @@ fields:
   - name: name
     title: 商号
     description: "NFKC で正規化した商号"
+---

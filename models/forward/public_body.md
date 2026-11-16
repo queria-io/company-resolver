@@ -1,5 +1,6 @@
-schema: forward
-name: public_body
+---
+$schema: https://queria.io/schemas/table/v1.json
+table: forward.public_body
 title: 国の機関と地方公共団体
 description: |-
   国の機関と地方公共団体の一覧です。部局の名前（例: 国土交通省関東地方整備局）を、親の機関の法人番号に照合するのに使います。
@@ -30,3 +31,4 @@ fields:
   - name: prefixed_core
     title: 都道府県名を付けた名前の本体
     description: "地方公共団体で、名前が都道府県名で始まらないもの (例: 東京都千代田区)。それ以外は NULL"
+---
