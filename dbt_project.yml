@@ -56,11 +56,12 @@ models:
         - "CALL company_resolver.set_option('parquet_compression', 'zstd', schema => 'reverse')"
       # 分けて書くテーブルは 1 スレッドで書き、書き出しの区切りを行グループの倍数にして、入力の並びを保つ
       # (並列に書くと並びが崩れ、1 つの法人番号の範囲が多くの行グループに散る)
-      company:
-        +partitioned_by: shard
-        +pre-hook:
-          - "SET threads = 1"
-          - "SET partitioned_write_flush_threshold = 491520"
-        +post-hook:
-          - "RESET threads"
-          - "RESET partitioned_write_flush_threshold"
+      mart:
+        company:
+          +partitioned_by: shard
+          +pre-hook:
+            - "SET threads = 1"
+            - "SET partitioned_write_flush_threshold = 491520"
+          +post-hook:
+            - "RESET threads"
+            - "RESET partitioned_write_flush_threshold"
