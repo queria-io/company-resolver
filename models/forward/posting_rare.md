@@ -1,21 +1,14 @@
-schema: forward
-name: posting_common
-title: bigram 索引（出現が多いもの）
+---
+$schema: https://queria.io/schemas/table/v1.json
+table: forward.posting_rare
+title: bigram 索引（出現が少ないもの）
 description: |-
-  出現する法人が 10,000 を超える bigram ごとの法人の一覧です。商号を 2 文字ずつに分けた並び（bigram）で、近い商号の法人を住所の市区町村の中で検索するのに使います。
-
-  - common_id と bucket ごとにファイルを分けています
+  出現する法人が 10,000 以下の bigram ごとの法人の一覧です。商号を 2 文字ずつに分けた並び（bigram）で、近い商号の法人を検索するのに使います。
 keywords:
   - 法人番号
 sources:
   - path: https://www.houjin-bangou.nta.go.jp/
 fields:
-  - name: common_id
-    title: bigram の番号
-    description: "gram の common_id"
-  - name: bucket
-    title: 市区町村の区分
-    description: "lg_code を 64 で割った余り"
   - name: g
     title: bigram
   - name: lg_code
@@ -32,3 +25,4 @@ fields:
   - name: name
     title: 商号
     description: "NFKC で正規化した商号"
+---

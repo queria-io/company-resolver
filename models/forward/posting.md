@@ -1,5 +1,6 @@
-schema: forward
-name: posting
+---
+$schema: https://queria.io/schemas/table/v1.json
+table: forward.posting
 title: 商号の bigram 索引
 description: |-
   商号を 2 文字ずつに分けた並び（bigram）ごとの法人の一覧です。法人格と空白・中黒・ハイフン類を除き、英字を大文字に、小書きの仮名を大きい仮名に正規化した商号から作ります。
@@ -17,3 +18,4 @@ fields:
     description: "本店所在地の市区町村"
   - name: corporate_number
     title: 法人番号
+---

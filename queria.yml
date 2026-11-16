@@ -1,5 +1,4 @@
-# この dataset.yml は fdl commit が読む（FDL の dataset.json を YAML で書いたもの）。
-# テーブルの説明は models/ の *.table.yml に書く。列の型・NULL・行数は fdl commit がカタログから埋める。
+$schema: https://queria.io/schemas/dataset/v1.json
 name: company_resolver
 title: 法人名寄せ用 索引
 description: |-
@@ -12,7 +11,6 @@ keywords:
   - 企業マスタ
 homepage: https://github.com/queria-io/company-resolver
 language: ja
-
 licenses:
   - JP-PDL-1.0
 
@@ -27,24 +25,21 @@ contributors:
 
 spatial_coverage: [JP]
 update_frequency: monthly
-
 schemas:
   - name: forward
     title: 正引き
   - name: reverse
     title: 逆引き
 
-annotations:
-  queria:
-    themes: [economy]
-    cover: 🏢
-    ai_context:
-      instructions: |
-        Queria Company Resolver が読む索引。企業名から法人番号を引くときは、SQL の resolve_company 関数か
-        company-resolver.queria.io/v1/forward を使う。forward.company_name は商号を NFKC で正規化した現存法人の一覧。
-        reverse.company は閉鎖した法人も含む法人ごとの最新の状態で、旧商号 (former_names) と旧所在地 (former_addresses) を持つ。
-        結合キーは corporate_number（法人番号）と lg_code（市区町村）。
-      synonyms: [名寄せ, 法人名寄せ, Company Resolver]
-      examples:
-        - 旧商号から今の法人番号を引きたい
-        - 閉鎖した法人の承継先を知りたい
+themes: [economy]
+cover: 🏢
+ai_context:
+  instructions: |
+    Queria Company Resolver が読む索引。企業名から法人番号を引くときは、SQL の resolve_company 関数か
+    company-resolver.queria.io/v1/forward を使う。forward.company_name は商号を NFKC で正規化した現存法人の一覧。
+    reverse.company は閉鎖した法人も含む法人ごとの最新の状態で、旧商号 (former_names) と旧所在地 (former_addresses) を持つ。
+    結合キーは corporate_number（法人番号）と lg_code（市区町村）。
+  synonyms: [名寄せ, 法人名寄せ, Company Resolver]
+  examples:
+    - 旧商号から今の法人番号を引きたい
+    - 閉鎖した法人の承継先を知りたい

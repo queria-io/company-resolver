@@ -1,5 +1,6 @@
-schema: forward
-name: city
+---
+$schema: https://queria.io/schemas/table/v1.json
+table: forward.city
 title: 市区町村
 description: |-
   本店所在地に現れる市区町村の lg_code と名前です。照合で住所から市区町村を切り出すのに使います。
@@ -15,3 +16,4 @@ fields:
     title: 都道府県名
   - name: city_name
     title: 市区町村名
+---

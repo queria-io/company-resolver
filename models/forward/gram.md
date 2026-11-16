@@ -1,5 +1,6 @@
-schema: forward
-name: gram
+---
+$schema: https://queria.io/schemas/table/v1.json
+table: forward.gram
 title: bigram の出現数
 description: |-
   bigram ごとの、その bigram を商号に含む法人の数と IDF です。照合で珍しい bigram から読むのに使います。
@@ -19,3 +20,4 @@ fields:
   - name: common_id
     title: bigram の番号
     description: "出現する法人が 10,000 を超える bigram に付けた番号。posting_common のファイルを分ける。それ以外は NULL"
+---

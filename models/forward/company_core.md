@@ -1,5 +1,6 @@
-schema: forward
-name: company_core
+---
+$schema: https://queria.io/schemas/table/v1.json
+table: forward.company_core
 title: 法人の商号の本体
 description: |-
   現存する法人ごとの、正規化した商号の本体・法人格・本店所在地の市区町村・商号です。法人格と空白・中黒・ハイフン類を除き、英字を大文字に、小書きの仮名を大きい仮名に正規化した商号の本体で、同じ商号の法人を引くのに使います。
@@ -25,3 +26,4 @@ fields:
   - name: name
     title: 商号
     description: "NFKC で正規化した商号"
+---
