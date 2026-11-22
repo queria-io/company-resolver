@@ -26,17 +26,23 @@ const dataset = (prefix: string, table: object): R2Bucket => {
 describe("loadIndex", () => {
   it("main が指すバージョンの tables.json からファイルを引く", async () => {
     const files = [{ path: "reverse/company/a.parquet", rows: 1, bytes: 10, footer_bytes: 2 }];
-    expect(await loadIndex(dataset("r/", { files }), "r/")).toEqual({
+    expect(await loadIndex(dataset("r/", { files }), "r/")).toMatchObject({
       version: ID,
       tables: {
-        "reverse.company": [{ key: "r/tables/reverse/company/a.parquet", bytes: 10, footer: 2 }],
+        "reverse.company": [
+          { key: "tables/reverse/company/a.parquet", rows: 1, bytes: 10, footerBytes: 2 },
+        ],
       },
     });
   });
 
-  it("削除ファイルのあるテーブルは読まない", async () => {
+  it("削除ファイルも引く (読むときに削除した行を除く)", async () => {
     const deletes = { path: "d.parquet", rows: 1, bytes: 1 };
     const files = [{ path: "a.parquet", rows: 1, bytes: 10, deletes }];
-    await expect(loadIndex(dataset("s/", { files }), "s/")).rejects.toThrow("deletes");
+    expect(await loadIndex(dataset("s/", { files }), "s/")).toMatchObject({
+      tables: {
+        "reverse.company": [{ key: "tables/a.parquet", deletes: { key: "tables/d.parquet" } }],
+      },
+    });
   });
 });

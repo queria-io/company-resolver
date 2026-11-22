@@ -50,7 +50,7 @@ GET /v1/reverse?corporate_number=1180301018771
 
 ### 逆引き（R2）
 
-Worker は DuckLake のカタログを読まず、FDL の `refs/heads/main` が指すバージョンの `tables.json` から、`reverse.company` の Parquet を引いて直接読む（`src/source.ts`）。置き場は `wrangler.jsonc` の `DATA_SOURCE`。`shard`（法人番号の下 3 桁）ごとにファイルを分け、法人番号の順に並べ、行グループは 2,048 行。逆引きは `company` のフッターと行グループの 2 回読む。
+Worker は DuckLake のカタログを読まず、FDL の `refs/heads/main` が指すバージョンの `tables.json` から、`reverse.company` の Parquet を引き、fdl-js の `readWhere` で直接読む（`src/source.ts`・`src/reverse.ts`）。置き場は `wrangler.jsonc` の `DATA_SOURCE`。`shard`（法人番号の下 3 桁）ごとにファイルを分け、法人番号の順に並べ、行グループは 2,048 行。逆引きは `company` のフッターと行グループの 2 回読む。フッターは拠点のキャッシュ（Cache API）に置くので、同じ拠点で同じファイルを 2 回目に読むときは行グループの 1 回だけになる。
 
 ## コマンド
 

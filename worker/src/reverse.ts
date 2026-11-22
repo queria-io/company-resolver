@@ -1,5 +1,6 @@
 // 法人番号から法人を返す。索引は models/reverse/mart/company.sql の dbt のモデル
-import { columnStats, openFile, readGroups, type ReadLog } from "./parquet";
+import { type OpenOptions, openParquet, readWhere } from "@queria-io/fdl-js";
+
 import { type Index, shardFiles } from "./source";
 
 type Day = Date | string | null;
@@ -104,22 +105,24 @@ const toCompany = ({
   former_addresses: (former_addresses ?? []).map((f) => ({ ...f, until: toDate(f.until) })),
 });
 
+/**
+ * 法人番号の下 3 桁 (shard) のファイルを開き、行グループの corporate_number の最小・最大で選んだ行グループだけを読む。
+ * フッターは options.cache に覚えておけば、2 回目からは行グループの 1 回だけを読む
+ */
 export const reverse = async (
-  bucket: R2Bucket,
   index: Index,
   corporateNumber: string,
-  log: ReadLog = { reads: 0, bytes: 0 },
+  options: OpenOptions = {},
 ): Promise<Company | null> => {
   const rows = await Promise.all(
     shardFiles(index, "reverse.company", corporateNumber.slice(-3)).map(async (ref) => {
-      const file = await openFile(bucket, ref, log);
-      if (!file) return [];
-      const groups = columnStats(file.metadata, "corporate_number").flatMap((s, i) =>
-        s.min <= corporateNumber && corporateNumber <= s.max ? [i] : [],
-      );
-      return readGroups<Row>(file, groups, COLUMNS);
+      const bytes = ref.bytes ?? (await index.store.size(ref.key));
+      if (bytes === null) return [];
+      // rows は読む範囲に使わない (行グループの行数はフッターから取る)
+      const file = await openParquet(index.store, { ...ref, rows: 0, bytes }, options);
+      return readWhere<Row>(file, "corporate_number", corporateNumber, COLUMNS);
     }),
   );
-  const row = rows.flat().find((r) => r.corporate_number === corporateNumber);
+  const row = rows.flat()[0];
   return row ? toCompany(row) : null;
 };

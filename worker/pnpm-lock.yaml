@@ -11,9 +11,6 @@ importers:
       '@queria-io/fdl-js':
         specifier: ^0.13.0
         version: 0.13.0
-      fzstd:
-        specifier: ^0.1.1
-        version: 0.1.1
       hono:
         specifier: ^4.13.14
         version: 4.13.17

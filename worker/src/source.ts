@@ -1,4 +1,12 @@
-import { open, r2Store, refreshing, tableFiles, type Version } from "@queria-io/fdl-js";
+import {
+  type DataFile,
+  open,
+  r2Store,
+  refreshing,
+  type Store,
+  tableFiles,
+  type Version,
+} from "@queria-io/fdl-js";
 
 // 逆引きの索引のファイルの置き場を引く (正引きの索引は静的アセット。src/assets.ts)。Worker が知るのは置き場 (DATA_SOURCE) だけにする。
 //   - 「…/」: FDL のデータセット (Queria の company_resolver)。refs/heads/main が指すバージョンの
@@ -10,9 +18,10 @@ import { open, r2Store, refreshing, tableFiles, type Version } from "@queria-io/
 export const TABLES = ["reverse.company"] as const;
 export type Table = (typeof TABLES)[number];
 
-/** R2 のキーと、分かればファイルの大きさとフッターの長さ */
-export type FileRef = { key: string; bytes?: number; footer?: number };
-export type Index = { version: string; tables: Record<Table, FileRef[]> };
+/** store の中のキーと、分かればファイルの大きさとフッターの長さ (目録はキーだけを書く) */
+export type FileRef = Omit<DataFile, "rows" | "bytes"> & { bytes?: number };
+/** store は置き場。tables のキーは store からのパス */
+export type Index = { version: string; store: Store; tables: Record<Table, FileRef[]> };
 
 type Manifest = { version: string; tables: Partial<Record<Table, string[]>> };
 
@@ -27,29 +36,24 @@ const dirOf = (key: string) => key.slice(0, key.lastIndexOf("/") + 1);
 const byTable = (pick: (t: Table) => FileRef[]): Record<Table, FileRef[]> =>
   Object.fromEntries(TABLES.map((t) => [t, pick(t)])) as Record<Table, FileRef[]>;
 
-export const fromManifest = (key: string, m: Manifest): Index => ({
+export const fromManifest = (bucket: R2Bucket, key: string, m: Manifest): Index => ({
   version: m.version,
-  tables: byTable((t) => (m.tables[t] ?? []).map((p) => ({ key: dirOf(key) + p }))),
+  store: r2Store(bucket, dirOf(key)),
+  tables: byTable((t) => (m.tables[t] ?? []).map((p) => ({ key: p }))),
 });
 
-/** FDL のバージョンの tables.json から、テーブルのファイルを引く。キーは置き場 (root) からのパス */
-export const fromVersion = (root: string, version: Version): Index => ({
+/** FDL のバージョンの tables.json から、テーブルのファイルを引く。削除ファイルと列の改名は fdl-js が読む */
+export const fromVersion = (bucket: R2Bucket, root: string, version: Version): Index => ({
   version: version.record.id,
-  tables: byTable((t) => {
-    const files = tableFiles(version, t) ?? [];
-    // 削除ファイルや列の改名は、Parquet だけを読むこの Worker では正しく読めない (表はまるごと作り直している)
-    if (version.files.tables[t]?.renamed_columns || files.some((f) => f.deletes)) {
-      throw new Error(`${t} has deletes or renamed columns`);
-    }
-    return files.map((f) => ({ key: root + f.key, bytes: f.bytes, footer: f.footerBytes }));
-  }),
+  store: r2Store(bucket, root),
+  tables: byTable((t) => tableFiles(version, t) ?? []),
 });
 
 const load = async (bucket: R2Bucket, source: string): Promise<Index> => {
   if (source.endsWith(".json")) {
-    return fromManifest(source, JSON.parse(await getText(bucket, source)) as Manifest);
+    return fromManifest(bucket, source, JSON.parse(await getText(bucket, source)) as Manifest);
   }
-  return fromVersion(source, await open(r2Store(bucket, source), "refs/heads/main"));
+  return fromVersion(bucket, source, await open(r2Store(bucket, source), "refs/heads/main"));
 };
 
 /** 読む先を覚えておく時間。Sync のあと、遅くともこれだけたてば新しいバージョンを読む */

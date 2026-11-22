@@ -1,10 +1,10 @@
 // 法人名寄せ API。正引きは企業名 (と住所) から法人番号の候補を、逆引きは法人番号から法人を返す。照合の規則は DESIGN.md
+import { cacheApiFooterCache } from "@queria-io/fdl-js";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 
-import { type ReadLog } from "./parquet";
 import { type AssetLog, assetFiles, loadVersion, rowReader } from "./assets";
 import { forward, forwardMany, type Input, loadCities } from "./forward";
 import { isCorporateNumber, reverse } from "./reverse";
@@ -173,14 +173,23 @@ app.get("/v1/forward/batch", async (c) => {
   );
 });
 
+/** 逆引きのファイルのフッターを拠点のキャッシュに置く (ファイルは書き換えないので、キーだけで引ける) */
+const footers = () => cacheApiFooterCache(caches.default);
+
 app.get("/v1/reverse", async (c) => {
   const corporateNumber = c.req.query("corporate_number")?.trim() ?? "";
   if (!isCorporateNumber(corporateNumber)) {
     return c.json({ error: "corporate_number に 13 桁の法人番号を渡してください" }, 400);
   }
-  const log: ReadLog = { reads: 0, bytes: 0 };
+  const log = { reads: 0, bytes: 0 };
   const index = await loadIndex(c.env.DATA, c.env.DATA_SOURCE);
-  const company = await reverse(c.env.DATA, index, corporateNumber, log);
+  const company = await reverse(index, corporateNumber, {
+    cache: footers(),
+    onRead: (bytes) => {
+      log.reads += 1;
+      log.bytes += bytes;
+    },
+  });
   c.header("X-R2-Reads", String(log.reads));
   c.header("X-R2-Bytes", String(log.bytes));
   return company ? c.json(company) : c.json({ error: "法人番号が見つかりません" }, 404);
