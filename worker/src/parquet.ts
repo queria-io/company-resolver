@@ -46,7 +46,7 @@ export const openFile = async (
   { key, footer: footerLength }: FileRef,
   log: ReadLog,
 ): Promise<ParquetFile | null> => {
-  // フッターの長さが分かれば (FDL の files.json)、フッターと末尾の 8 バイトだけを読む
+  // フッターの長さが分かれば (FDL の tables.json)、フッターと末尾の 8 バイトだけを読む
   const tail = await bucket.get(key, {
     range: { suffix: footerLength === undefined ? TAIL_BYTES : footerLength + 8 },
   });

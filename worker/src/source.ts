@@ -1,6 +1,8 @@
+import { open, r2Store, refreshing, tableFiles, type Version } from "@queria-io/fdl-js";
+
 // 逆引きの索引のファイルの置き場を引く (正引きの索引は静的アセット。src/assets.ts)。Worker が知るのは置き場 (DATA_SOURCE) だけにする。
-//   - 「…/」: FDL のリポジトリ (Queria の company_resolver データセット)。refs/heads/main が指すバージョンの
-//     files.json (テーブルごとのファイル一覧) から引く。毎月の Sync で main が進めば、デプロイなしで読む先が切り替わる
+//   - 「…/」: FDL のデータセット (Queria の company_resolver)。refs/heads/main が指すバージョンの
+//     tables.json (テーブルごとのファイル一覧) から引く。毎月の Sync で main が進めば、デプロイなしで読む先が切り替わる
 //   - 「….json」: 目録。{ "version": "…", "tables": { "reverse.company": ["reverse/company/shard=001/a.parquet"], … } }。
 //     パスは目録からの相対。テストと、セルフホストで自分の Parquet を読ませるときに使う
 
@@ -13,16 +15,6 @@ export type FileRef = { key: string; bytes?: number; footer?: number };
 export type Index = { version: string; tables: Record<Table, FileRef[]> };
 
 type Manifest = { version: string; tables: Partial<Record<Table, string[]>> };
-/** FDL の versions/<ID>/files.json */
-type FileList = {
-  tables: Record<
-    string,
-    {
-      renamed_columns?: boolean;
-      files: { path?: string; deletes?: unknown; bytes?: number; footer_bytes?: number }[];
-    }
-  >;
-};
 
 const getText = async (bucket: R2Bucket, key: string): Promise<string> => {
   const object = await bucket.get(key);
@@ -40,19 +32,16 @@ export const fromManifest = (key: string, m: Manifest): Index => ({
   tables: byTable((t) => (m.tables[t] ?? []).map((p) => ({ key: dirOf(key) + p }))),
 });
 
-export const fromFileList = (root: string, version: string, list: FileList): Index => ({
-  version,
+/** FDL のバージョンの tables.json から、テーブルのファイルを引く。キーは置き場 (root) からのパス */
+export const fromVersion = (root: string, version: Version): Index => ({
+  version: version.record.id,
   tables: byTable((t) => {
-    const table = list.tables[t];
-    if (!table) return [];
+    const files = tableFiles(version, t) ?? [];
     // 削除ファイルや列の改名は、Parquet だけを読むこの Worker では正しく読めない (表はまるごと作り直している)
-    if (table.renamed_columns || table.files.some((f) => f.deletes)) {
+    if (version.files.tables[t]?.renamed_columns || files.some((f) => f.deletes)) {
       throw new Error(`${t} has deletes or renamed columns`);
     }
-    return table.files.map((f) => {
-      if (!f.path) throw new Error(`${t} has a file outside the repository`);
-      return { key: root + f.path, bytes: f.bytes, footer: f.footer_bytes };
-    });
+    return files.map((f) => ({ key: root + f.key, bytes: f.bytes, footer: f.footerBytes }));
   }),
 });
 
@@ -60,26 +49,24 @@ const load = async (bucket: R2Bucket, source: string): Promise<Index> => {
   if (source.endsWith(".json")) {
     return fromManifest(source, JSON.parse(await getText(bucket, source)) as Manifest);
   }
-  const config = JSON.parse(await getText(bucket, `${source}fdl.json`)) as { data_dir?: string };
-  const id = (await getText(bucket, `${source}refs/heads/main`)).trim();
-  const list = JSON.parse(await getText(bucket, `${source}versions/${id}/files.json`)) as FileList;
-  return fromFileList(source + (config.data_dir ?? "tables/"), id, list);
+  return fromVersion(source, await open(r2Store(bucket, source), "refs/heads/main"));
 };
 
 /** 読む先を覚えておく時間。Sync のあと、遅くともこれだけたてば新しいバージョンを読む */
 const TTL_MS = 5 * 60 * 1000;
-let cached: { source: string; at: number; index: Promise<Index> } | null = null;
+const loaders = new Map<string, () => Promise<Index>>();
 
-/** 置き場の索引のファイル一覧。問い合わせのたびに R2 を 3 回読まないよう、TTL_MS のあいだ覚えておく */
-export const loadIndex = (bucket: R2Bucket, source: string, now = Date.now()): Promise<Index> => {
-  if (cached?.source === source && now - cached.at < TTL_MS) return cached.index;
-  const index = load(bucket, source);
-  cached = { source, at: now, index };
-  // 失敗したら覚えない (次の問い合わせで読み直す)
-  index.catch(() => {
-    if (cached?.index === index) cached = null;
-  });
-  return index;
+/**
+ * 置き場の索引のファイル一覧。問い合わせのたびに R2 を読まないよう、TTL_MS のあいだ覚えておく。
+ * 読み直しに失敗したら前の一覧を使い続ける (refs を読めない一時の失敗で止めない)
+ */
+export const loadIndex = (bucket: R2Bucket, source: string): Promise<Index> => {
+  let loader = loaders.get(source);
+  if (!loader) {
+    loader = refreshing(() => load(bucket, source), TTL_MS, { onError: console.error });
+    loaders.set(source, loader);
+  }
+  return loader();
 };
 
 /** テーブルのファイルのうち、パスの「shard=値/」が shard のもの */
