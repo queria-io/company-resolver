@@ -1,6 +1,6 @@
 // 逆引きの索引のファイルの置き場を引く (正引きの索引は静的アセット。src/assets.ts)。Worker が知るのは置き場 (DATA_SOURCE) だけにする。
-//   - 「…/」: FDL のリポジトリ (Queria の company_resolver データセット)。refs/heads/main が指すバージョンの
-//     files.json (テーブルごとのファイル一覧) から引く。毎月の Sync で main が進めば、デプロイなしで読む先が切り替わる
+//   - 「…/」: FDL のデータセット (Queria の company_resolver)。refs/heads/main が指すバージョンの
+//     tables.json (テーブルごとのファイル一覧) から引く。毎月の Sync で main が進めば、デプロイなしで読む先が切り替わる
 //   - 「….json」: 目録。{ "version": "…", "tables": { "reverse.company": ["reverse/company/shard=001/a.parquet"], … } }。
 //     パスは目録からの相対。テストと、セルフホストで自分の Parquet を読ませるときに使う
 
@@ -13,8 +13,8 @@ export type FileRef = { key: string; bytes?: number; footer?: number };
 export type Index = { version: string; tables: Record<Table, FileRef[]> };
 
 type Manifest = { version: string; tables: Partial<Record<Table, string[]>> };
-/** FDL の versions/<ID>/files.json */
-type FileList = {
+/** FDL の versions/<ID>/tables.json */
+type TableList = {
   tables: Record<
     string,
     {
@@ -22,6 +22,18 @@ type FileList = {
       files: { path?: string; deletes?: unknown; bytes?: number; footer_bytes?: number }[];
     }
   >;
+};
+
+/** FDL の versions/<ID>/version.json。tables.path が tables.json のファイル名 */
+type VersionRecord = { tables?: { path: string } };
+
+/** version.json が指す tables.json のファイル名。バージョンのフォルダの外を指すものは読まない */
+export const tablesFile = (v: VersionRecord): string => {
+  const path = v.tables?.path;
+  if (!path || /[/\\]/.test(path) || path === "." || path === "..") {
+    throw new Error("version.json does not name tables.json");
+  }
+  return path;
 };
 
 const getText = async (bucket: R2Bucket, key: string): Promise<string> => {
@@ -40,7 +52,7 @@ export const fromManifest = (key: string, m: Manifest): Index => ({
   tables: byTable((t) => (m.tables[t] ?? []).map((p) => ({ key: dirOf(key) + p }))),
 });
 
-export const fromFileList = (root: string, version: string, list: FileList): Index => ({
+export const fromTableList = (root: string, version: string, list: TableList): Index => ({
   version,
   tables: byTable((t) => {
     const table = list.tables[t];
@@ -62,15 +74,17 @@ const load = async (bucket: R2Bucket, source: string): Promise<Index> => {
   }
   const config = JSON.parse(await getText(bucket, `${source}fdl.json`)) as { data_dir?: string };
   const id = (await getText(bucket, `${source}refs/heads/main`)).trim();
-  const list = JSON.parse(await getText(bucket, `${source}versions/${id}/files.json`)) as FileList;
-  return fromFileList(source + (config.data_dir ?? "tables/"), id, list);
+  const dir = `${source}versions/${id}/`;
+  const record = JSON.parse(await getText(bucket, `${dir}version.json`)) as VersionRecord;
+  const list = JSON.parse(await getText(bucket, dir + tablesFile(record))) as TableList;
+  return fromTableList(source + (config.data_dir ?? "tables/"), id, list);
 };
 
 /** 読む先を覚えておく時間。Sync のあと、遅くともこれだけたてば新しいバージョンを読む */
 const TTL_MS = 5 * 60 * 1000;
 let cached: { source: string; at: number; index: Promise<Index> } | null = null;
 
-/** 置き場の索引のファイル一覧。問い合わせのたびに R2 を 3 回読まないよう、TTL_MS のあいだ覚えておく */
+/** 置き場の索引のファイル一覧。問い合わせのたびに R2 を 4 回読まないよう、TTL_MS のあいだ覚えておく */
 export const loadIndex = (bucket: R2Bucket, source: string, now = Date.now()): Promise<Index> => {
   if (cached?.source === source && now - cached.at < TTL_MS) return cached.index;
   const index = load(bucket, source);
