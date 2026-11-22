@@ -2,7 +2,7 @@
 // 静的アセットは丸ごとしか読めないので、索引は 1 件の検索で読むファイルが小さくなるように分けてある (dbt_project.yml)
 import { parquetReadObjects } from "hyparquet";
 
-import { compressors } from "./parquet";
+import { compressors } from "@queria-io/fdl-js";
 
 /** パスのファイルの中身。無ければ null */
 export type Files = (path: string) => Promise<ArrayBuffer | null>;

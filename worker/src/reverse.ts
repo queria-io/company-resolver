@@ -1,6 +1,10 @@
 // 法人番号から法人を返す。索引は models/reverse/mart/company.sql の dbt のモデル
-import { columnStats, openFile, readGroups, type ReadLog } from "./parquet";
-import { type Index, shardFiles } from "./source";
+import { openParquet, r2Store, readWhere } from "@queria-io/fdl-js";
+
+import { type FileRef, type Index, shardFiles } from "./source";
+
+/** 1 回の問い合わせで R2 から読んだ回数と量 */
+export type ReadLog = { reads: number; bytes: number };
 
 type Day = Date | string | null;
 
@@ -104,22 +108,32 @@ const toCompany = ({
   former_addresses: (former_addresses ?? []).map((f) => ({ ...f, until: toDate(f.until) })),
 });
 
+/** ファイルを開く。大きさの分からないファイル (目録) は問い合わせる。ファイルが無ければ null */
+const openFile = async (bucket: R2Bucket, ref: FileRef, log: ReadLog) => {
+  const store = r2Store(bucket);
+  const bytes = ref.bytes ?? (await store.size(ref.key));
+  if (bytes === null) return null;
+  const onRead = (n: number) => {
+    log.reads += 1;
+    log.bytes += n;
+  };
+  // openParquet は行数を使わない (目録のファイルは行数も分からない)
+  return openParquet(store, { ...ref, rows: ref.rows ?? 0, bytes }, { onRead });
+};
+
 export const reverse = async (
   bucket: R2Bucket,
   index: Index,
   corporateNumber: string,
   log: ReadLog = { reads: 0, bytes: 0 },
 ): Promise<Company | null> => {
+  // ファイルの中は法人番号の順に並ぶので、行グループの最小・最大で番号の入る行グループだけを読む
   const rows = await Promise.all(
     shardFiles(index, "reverse.company", corporateNumber.slice(-3)).map(async (ref) => {
       const file = await openFile(bucket, ref, log);
-      if (!file) return [];
-      const groups = columnStats(file.metadata, "corporate_number").flatMap((s, i) =>
-        s.min <= corporateNumber && corporateNumber <= s.max ? [i] : [],
-      );
-      return readGroups<Row>(file, groups, COLUMNS);
+      return file ? readWhere<Row>(file, "corporate_number", corporateNumber, COLUMNS) : [];
     }),
   );
-  const row = rows.flat().find((r) => r.corporate_number === corporateNumber);
+  const row = rows.flat()[0];
   return row ? toCompany(row) : null;
 };

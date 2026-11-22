@@ -29,14 +29,17 @@ describe("loadIndex", () => {
     expect(await loadIndex(dataset("r/", { files }), "r/")).toEqual({
       version: ID,
       tables: {
-        "reverse.company": [{ key: "r/tables/reverse/company/a.parquet", bytes: 10, footer: 2 }],
+        "reverse.company": [
+          { key: "r/tables/reverse/company/a.parquet", rows: 1, bytes: 10, footerBytes: 2 },
+        ],
       },
     });
   });
 
-  it("削除ファイルのあるテーブルは読まない", async () => {
+  it("削除ファイルのキーにも置き場を付ける", async () => {
     const deletes = { path: "d.parquet", rows: 1, bytes: 1 };
     const files = [{ path: "a.parquet", rows: 1, bytes: 10, deletes }];
-    await expect(loadIndex(dataset("s/", { files }), "s/")).rejects.toThrow("deletes");
+    const index = await loadIndex(dataset("s/", { files }), "s/");
+    expect(index.tables["reverse.company"][0]?.deletes?.key).toBe("s/tables/d.parquet");
   });
 });

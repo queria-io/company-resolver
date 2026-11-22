@@ -4,10 +4,9 @@ import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 
-import { type ReadLog } from "./parquet";
+import { isCorporateNumber, type ReadLog, reverse } from "./reverse";
 import { type AssetLog, assetFiles, loadVersion, rowReader } from "./assets";
 import { forward, forwardMany, type Input, loadCities } from "./forward";
-import { isCorporateNumber, reverse } from "./reverse";
 import { loadIndex } from "./source";
 
 export type Env = {

@@ -1,4 +1,11 @@
-import { open, r2Store, refreshing, tableFiles, type Version } from "@queria-io/fdl-js";
+import {
+  type DataFile,
+  open,
+  r2Store,
+  refreshing,
+  tableFiles,
+  type Version,
+} from "@queria-io/fdl-js";
 
 // 逆引きの索引のファイルの置き場を引く (正引きの索引は静的アセット。src/assets.ts)。Worker が知るのは置き場 (DATA_SOURCE) だけにする。
 //   - 「…/」: FDL のデータセット (Queria の company_resolver)。refs/heads/main が指すバージョンの
@@ -10,8 +17,8 @@ import { open, r2Store, refreshing, tableFiles, type Version } from "@queria-io/
 export const TABLES = ["reverse.company"] as const;
 export type Table = (typeof TABLES)[number];
 
-/** R2 のキーと、分かればファイルの大きさとフッターの長さ */
-export type FileRef = { key: string; bytes?: number; footer?: number };
+/** fdl-js のデータファイル。キーはバケットの頭から。目録のファイルは大きさが分からないので、読むときに問い合わせる */
+export type FileRef = Omit<DataFile, "rows" | "bytes"> & Partial<Pick<DataFile, "rows" | "bytes">>;
 export type Index = { version: string; tables: Record<Table, FileRef[]> };
 
 type Manifest = { version: string; tables: Partial<Record<Table, string[]>> };
@@ -32,17 +39,19 @@ export const fromManifest = (key: string, m: Manifest): Index => ({
   tables: byTable((t) => (m.tables[t] ?? []).map((p) => ({ key: dirOf(key) + p }))),
 });
 
-/** FDL のバージョンの tables.json から、テーブルのファイルを引く。キーは置き場 (root) からのパス */
+/**
+ * FDL のバージョンの tables.json から、テーブルのファイルを引く。キーは置き場 (root) を頭に付けたパス。
+ * 削除ファイルと列の定義も渡し、fdl-js が削除した行を除き、改名した列を今の名前で読む
+ */
 export const fromVersion = (root: string, version: Version): Index => ({
   version: version.record.id,
-  tables: byTable((t) => {
-    const files = tableFiles(version, t) ?? [];
-    // 削除ファイルや列の改名は、Parquet だけを読むこの Worker では正しく読めない (表はまるごと作り直している)
-    if (version.files.tables[t]?.renamed_columns || files.some((f) => f.deletes)) {
-      throw new Error(`${t} has deletes or renamed columns`);
-    }
-    return files.map((f) => ({ key: root + f.key, bytes: f.bytes, footer: f.footerBytes }));
-  }),
+  tables: byTable((t) =>
+    (tableFiles(version, t) ?? []).map(({ deletes, ...f }) => ({
+      ...f,
+      key: root + f.key,
+      ...(deletes ? { deletes: { ...deletes, key: root + deletes.key } } : {}),
+    })),
+  ),
 });
 
 const load = async (bucket: R2Bucket, source: string): Promise<Index> => {
