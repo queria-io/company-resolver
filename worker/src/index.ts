@@ -173,8 +173,15 @@ app.get("/v1/forward/batch", async (c) => {
   );
 });
 
-/** 逆引きのファイルのフッターを拠点のキャッシュに置く (ファイルは書き換えないので、キーだけで引ける) */
-const footers = () => cacheApiFooterCache(caches.default);
+/**
+ * 逆引きのファイルのフッターを拠点のキャッシュに置く。キーは置き場 (store) からのパスなので、置き場と索引のバージョンを
+ * キャッシュのキーに含める (別の置き場の同じパスや、目録で同じパスに置き直したファイルのフッターを引かない)
+ */
+const footers = (source: string, version: string) =>
+  cacheApiFooterCache(
+    caches.default,
+    `https://fdl.invalid/footer/${encodeURIComponent(source)}/${encodeURIComponent(version)}/`,
+  );
 
 app.get("/v1/reverse", async (c) => {
   const corporateNumber = c.req.query("corporate_number")?.trim() ?? "";
@@ -184,7 +191,7 @@ app.get("/v1/reverse", async (c) => {
   const log = { reads: 0, bytes: 0 };
   const index = await loadIndex(c.env.DATA, c.env.DATA_SOURCE);
   const company = await reverse(index, corporateNumber, {
-    cache: footers(),
+    cache: footers(c.env.DATA_SOURCE, index.version),
     onRead: (bytes) => {
       log.reads += 1;
       log.bytes += bytes;

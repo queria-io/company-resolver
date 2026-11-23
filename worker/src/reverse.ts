@@ -1,5 +1,5 @@
 // 法人番号から法人を返す。索引は models/reverse/mart/company.sql の dbt のモデル
-import { type OpenOptions, openParquet, readWhere } from "@queria-io/fdl-js";
+import { type OnRead, type OpenOptions, openParquet, readWhere } from "@queria-io/fdl-js";
 
 import { type Index, shardFiles } from "./source";
 
@@ -105,6 +105,25 @@ const toCompany = ({
   former_addresses: (former_addresses ?? []).map((f) => ({ ...f, until: toDate(f.until) })),
 });
 
+/** 大きさの分からないファイル (目録) の大きさ。索引を読み直すまで覚えておき、問い合わせのたびに HEAD しない */
+const sizes = new WeakMap<Index, Map<string, number>>();
+
+/** ファイルの大きさ。無ければ null。HEAD も R2 の読みとして onRead に数える */
+const sizeOf = async (index: Index, key: string, onRead?: OnRead): Promise<number | null> => {
+  let known = sizes.get(index);
+  if (!known) {
+    known = new Map();
+    sizes.set(index, known);
+  }
+  const hit = known.get(key);
+  if (hit !== undefined) return hit;
+  const t0 = Date.now();
+  const size = await index.store.size(key);
+  onRead?.(0, Date.now() - t0);
+  if (size !== null) known.set(key, size);
+  return size;
+};
+
 /**
  * 法人番号の下 3 桁 (shard) のファイルを開き、行グループの corporate_number の最小・最大で選んだ行グループだけを読む。
  * フッターは options.cache に覚えておけば、2 回目からは行グループの 1 回だけを読む
@@ -116,7 +135,7 @@ export const reverse = async (
 ): Promise<Company | null> => {
   const rows = await Promise.all(
     shardFiles(index, "reverse.company", corporateNumber.slice(-3)).map(async (ref) => {
-      const bytes = ref.bytes ?? (await index.store.size(ref.key));
+      const bytes = ref.bytes ?? (await sizeOf(index, ref.key, options.onRead));
       if (bytes === null) return [];
       // rows は読む範囲に使わない (行グループの行数はフッターから取る)
       const file = await openParquet(index.store, { ...ref, rows: 0, bytes }, options);
