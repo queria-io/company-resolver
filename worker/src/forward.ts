@@ -423,8 +423,15 @@ const ownerAnswer = (
     if (others === null) return null;
     // 持ち主の商号で始まる別の法人が、持ち主の後ろの文字数より少ない編集で入力に届くなら、入力はその法人の
     // 誤字と読める (茨城県交通サビース → 茨城県交通サービス)。持ち主を先頭に並べない
+    // 商号の先頭が入力と同じ法人 (prefix_rank の prefix) があれば、入力はその法人の末尾が欠けた名前と読める
+    // (茨城県交通サー → 茨城県交通サービス)。機関の部局では見ない (後ろに続く商号は部局の中の別の組織)
     const rest = Array.from(q.core).length - Array.from(owners[0].core).length;
-    if (others.some((r) => r.p.core.startsWith(owners[0].core) && r.ed < rest)) return null;
+    if (
+      others.some(
+        (r) => (r.p.core.startsWith(owners[0].core) && r.ed < rest) || r.label === "prefix",
+      )
+    )
+      return null;
     const firsts: Ranked[] = owners
       .map((p) => ({ p, ed: 0, cityOk: q.cityOk(p), label: "parent" }))
       .sort(

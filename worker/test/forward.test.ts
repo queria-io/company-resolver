@@ -133,6 +133,14 @@ describe("照合の規則を外したとき (bench/ablate.ts)", () => {
     expect(legal.status).toBe("matched");
     expect(legal.candidates[0].corporate_number).toBe("1000000000005");
   });
+
+  it("prefix_rank を外せば、入力が商号の先頭と一致しても編集距離で示す", async () => {
+    const answer = await run("キャリアバ", "東京都中央区", ["prefix_rank"]);
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000006",
+      evidence: { name: "edit(2)" },
+    });
+  });
 });
 
 describe("/v1/forward の先頭が法人・機関の名前の入力 (prefix_owner)", () => {
@@ -200,6 +208,14 @@ describe("/v1/forward の先頭が法人・機関の名前の入力 (prefix_owne
     const answer = await forward({ name: "茨城県交通サビース" });
     expect(answer.candidates[0].corporate_number).toBe("1000000000016");
     expect(answer.candidates.map((c) => c.evidence.name)).not.toContain("parent");
+  });
+
+  it("入力が先頭の会社より長い商号の先頭と一致すれば、その会社の末尾が欠けた名前として先に並べる", async () => {
+    const answer = await forward({ name: "茨城県交通サー", address: "茨城県水戸市" });
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000016",
+      evidence: { name: "prefix" },
+    });
   });
 
   it("子会社の支店の名前は、最も長く一致した子会社を先頭に並べる", async () => {
