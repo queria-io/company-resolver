@@ -31,6 +31,7 @@ export const RULES = [
   "same_name_candidates",
   "prefix_owner",
   "prefix_rank",
+  "former_name",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -39,8 +40,12 @@ export type Row = {
   lg_code: string;
   corporate_number: string;
   legal_form: string | null;
+  /** 商号の本体。旧商号の行 (former がある) は旧商号の本体 */
   core: string;
+  /** 今の商号 */
   name: string;
+  /** 旧商号の行なら、その旧商号 (今の商号の行と、旧商号の列の無い索引は null か無し) */
+  former?: string | null;
 };
 
 export type Evidence = {
@@ -52,6 +57,8 @@ export type Evidence = {
 export type Candidate = {
   corporate_number: string;
   name: string;
+  /** 旧商号と照合したときの、その旧商号 (evidence.name の比較の相手) */
+  former_name?: string;
   prefecture: string | null;
   city: string | null;
   lg_code: string;
@@ -174,6 +181,7 @@ const ownerOf = async (
   core: string,
   bodies: PublicBodies,
   read: RowReader,
+  keep: (p: Row) => boolean,
 ): Promise<Owner | null> => {
   const parent = parentsOf(core, bodies);
   const chars = Array.from(core);
@@ -189,11 +197,14 @@ const ownerOf = async (
       lengths.slice(k, k + OWNER_BATCH).map(async (n) => {
         const prefix = chars.slice(0, n).join("");
         // 入力ごとに違うファイルなので、覚えずに読み捨てる
-        return (await read<Row>(exactPath(prefix), false)).filter((r) => r.core === prefix);
+        return (await read<Row>(exactPath(prefix), false)).filter(
+          (r) => r.core === prefix && keep(r),
+        );
       }),
     );
     const rows = found.find((r) => r.length > 0);
-    if (rows) return { company: rows, parent };
+    // 今の商号と旧商号の両方で一致した法人は 1 つにする
+    if (rows) return { company: firstPerCompany(rows.sort(keptFirst), (p) => p), parent };
   }
   return parent.bodies.length > 0 ? { company: null, parent } : null;
 };
@@ -210,8 +221,32 @@ const commonPath = (id: number, bucket: number) => `data/posting_common/${id}/${
 
 export type Ranked = { p: Row; ed: number; cityOk: boolean; label?: string };
 
+/** 索引の 1 行が表す商号: 法人と、商号 (旧商号を含む) の本体・法人格 */
+const rowKey = (p: Row) => `${p.corporate_number}\t${p.core}\t${p.legal_form ?? ""}`;
+
+/** 並べた順のまま、法人ごとに最初の 1 つだけを残す (今の商号と旧商号の両方で一致した法人を 2 回並べない) */
+const firstPerCompany = <T>(xs: readonly T[], p: (x: T) => Row): T[] => {
+  const seen = new Set<string>();
+  return xs.filter((x) => {
+    const cn = p(x).corporate_number;
+    if (seen.has(cn)) return false;
+    seen.add(cn);
+    return true;
+  });
+};
+
+/** 今の商号の行を旧商号の行より先にする比較 */
+const currentFirst = (a: Row, b: Row) => Number(Boolean(a.former)) - Number(Boolean(b.former));
+
 /**
- * IDF の合計の上位 COMPARE_TOP 件の法人番号と合計。合計が同じなら商号の編集距離の小さい順
+ * 同じ法人の行のうち残す 1 つを決める比較: 今の商号の行を先に、旧商号の行どうしは旧商号の順に
+ * (索引のファイルの中の行の順は former で並べていないので、それに頼らない)
+ */
+const keptFirst = (a: Row, b: Row) =>
+  currentFirst(a, b) || (a.former ?? "").localeCompare(b.former ?? "");
+
+/**
+ * IDF の合計の上位 COMPARE_TOP 社の商号 (rowKey) と合計。旧商号の行は今の商号と別に合計し、同じ法人の行はすべて残す。合計が同じなら商号の編集距離の小さい順
  * (全国で読む bigram が少なく同じ合計の法人が多いとき、入力に近い商号を落とさないため)
  */
 const topByScore = (
@@ -222,18 +257,26 @@ const topByScore = (
   const scores = new Map<string, number>();
   const distance = new Map<string, number>();
   for (const r of rows) {
-    scores.set(r.corporate_number, (scores.get(r.corporate_number) ?? 0) + (idf.get(r.g) ?? 0));
-    // 法人ごとに 1 回だけ計算する (rows には同じ法人が bigram の数だけある)
-    if (!distance.has(r.corporate_number))
-      distance.set(r.corporate_number, levenshtein(core, r.core));
+    const key = rowKey(r);
+    scores.set(key, (scores.get(key) ?? 0) + (idf.get(r.g) ?? 0));
+    // 商号ごとに 1 回だけ計算する (rows には同じ商号が bigram の数だけある)
+    if (!distance.has(key)) distance.set(key, levenshtein(core, r.core));
   }
+  // 上位 COMPARE_TOP 社の商号を、旧商号の行も含めて残す (1 社が今の商号と旧商号で枠を 2 つ使わないように)
+  const companies = new Set<string>();
   return new Map(
     [...scores]
       .sort(
         ([a, x], [b, y]) =>
           y - x || (distance.get(a) ?? 0) - (distance.get(b) ?? 0) || a.localeCompare(b),
       )
-      .slice(0, COMPARE_TOP),
+      .filter(([key]) => {
+        const cn = key.slice(0, key.indexOf("\t"));
+        if (companies.has(cn)) return true;
+        if (companies.size >= COMPARE_TOP) return false;
+        companies.add(cn);
+        return true;
+      }),
   );
 };
 
@@ -265,11 +308,14 @@ const answerOf = (
     candidates: ranked.slice(0, input.limit ?? 5).map(({ p, ed, cityOk, label }) => ({
       corporate_number: p.corporate_number,
       name: p.name,
+      ...(p.former ? { former_name: p.former } : {}),
       prefecture: cityOf.get(p.lg_code)?.prefecture_name ?? null,
       city: cityOf.get(p.lg_code)?.city_name ?? null,
       lg_code: p.lg_code,
       evidence: {
-        name: label ?? (ed > 0 ? `edit(${ed})` : name === p.name ? "exact" : "normalized"),
+        name:
+          label ??
+          (ed > 0 ? `edit(${ed})` : p.former ? "former" : name === p.name ? "exact" : "normalized"),
         legal_form: lf === null ? "missing" : lf === p.legal_form ? "exact" : "mismatch",
         city: !input.address || cityCodes.size === 0 ? "missing" : cityOk ? "exact" : "mismatch",
       },
@@ -297,13 +343,19 @@ const queryOf = (input: Input, cities: readonly City[], off: ReadonlySet<Rule>):
   };
 };
 
+/** former_name: 旧商号の行も照合に使う。外したときは今の商号の行だけを使う */
+const usable = (q: Query, p: Row): boolean => q.on("former_name") || !p.former;
+
 /** city_match: 住所の市区町村が分かるときは、市区町村まで一致して初めて一致とみなす */
 const cityMatches = (q: Query, p: Row): boolean =>
   !q.on("city_match") || q.cityCodes.size === 0 || q.cityOk(p);
 
-/** 商号が同じ法人のうち、法人格 (住所の市区町村が分かれば市区町村も) が一致するもの */
+/**
+ * 商号が同じ法人のうち、法人格 (住所の市区町村が分かれば市区町村も) が一致するもの。旧商号で一致した法人も含み、
+ * 今の商号と旧商号の両方で一致した法人は 1 つに数える
+ */
 const sameOf = (q: Query, exact: readonly Row[]): Row[] =>
-  exact.filter((p) => q.legalOk(p) && cityMatches(q, p));
+  firstPerCompany(exact.filter((p) => q.legalOk(p) && cityMatches(q, p)).sort(keptFirst), (p) => p);
 
 /**
  * 商号が同じ法人で答えが決まれば、その応答。商号と法人格 (住所の市区町村が分かれば市区町村も) が一致する
@@ -325,9 +377,17 @@ const answerByExact = (
         Number(same.has(b.p)) - Number(same.has(a.p)) ||
         Number(b.cityOk) - Number(a.cityOk) ||
         Number(q.legalOk(b.p)) - Number(q.legalOk(a.p)) ||
-        a.p.corporate_number.localeCompare(b.p.corporate_number),
+        currentFirst(a.p, b.p) ||
+        a.p.corporate_number.localeCompare(b.p.corporate_number) ||
+        keptFirst(a.p, b.p),
     );
-  return answerOf(q, cityOf, "matched", 1, ranked);
+  return answerOf(
+    q,
+    cityOf,
+    "matched",
+    1,
+    firstPerCompany(ranked, (r) => r.p),
+  );
 };
 
 /**
@@ -368,7 +428,7 @@ const postingsOf = async (
     const paths = commonId === null ? [rarePath(c.g)] : buckets.map((b) => commonPath(commonId, b));
     return paths.map(async (p) =>
       (await read<Posting>(p, false)).filter(
-        (r) => r.g === c.g && (c.national || q.cityCodes.has(r.lg_code)),
+        (r) => r.g === c.g && (c.national || q.cityCodes.has(r.lg_code)) && usable(q, r),
       ),
     );
   });
@@ -494,12 +554,12 @@ const answerByFuzzy = (
   const prefixed = (p: Row) =>
     q.on("prefix_rank") && p.core.length > q.core.length && p.core.startsWith(q.core);
   const rankEd = (r: { p: Row; ed: number }) => (prefixed(r.p) ? Math.min(r.ed, 1) : r.ed);
-  const byNumber = new Map([...rows, ...sameName].map((p) => [p.corporate_number, p]));
-  const ranked = [...new Set([...national.keys(), ...local.keys()])]
-    .flatMap((cn) => {
-      const p = byNumber.get(cn);
+  const byKey = new Map([...rows, ...sameName].map((p) => [rowKey(p), p]));
+  const sorted = [...new Set([...national.keys(), ...local.keys()])]
+    .flatMap((key) => {
+      const p = byKey.get(key);
       if (!p) return [];
-      const score = Math.max(national.get(cn) ?? 0, local.get(cn) ?? 0);
+      const score = Math.max(national.get(key) ?? 0, local.get(key) ?? 0);
       return [
         {
           p,
@@ -516,9 +576,12 @@ const answerByFuzzy = (
         rankEd(a) + penalty(a.cityOk) - (rankEd(b) + penalty(b.cityOk)) ||
         a.ed - b.ed ||
         Number(b.legal) - Number(a.legal) ||
+        currentFirst(a.p, b.p) ||
         b.score - a.score ||
         a.p.corporate_number.localeCompare(b.p.corporate_number),
     );
+  // 今の商号と旧商号の両方で候補になった法人は、前に並んだ方だけを残す
+  const ranked = firstPerCompany(sorted, (r) => r.p);
   const top = ranked[0];
   const sameCount = chosen.length > 0 || exact.length > 0 ? sameOf(q, exact).length : null;
   const byOwner = owner === null ? null : ownerAnswer(q, cityOf, owner, exact, ranked);
@@ -550,12 +613,14 @@ export const forwardMany = async (
   // 入力の全体と商号が同じ法人があれば ownerAnswer は使わないので、先頭の商号のファイルを読まない
   const ownerOfQuery = async (q: Query, exact: readonly Row[]): Promise<Owner | null> => {
     if (!q.on("prefix_owner") || q.lf !== null || exact.length > 0) return null;
-    return ownerOf(q.core, await loadPublicBodies(read), read);
+    return ownerOf(q.core, await loadPublicBodies(read), read, (p) => usable(q, p));
   };
   const cityOf = new Map(cities.map((c) => [c.lg_code, c]));
   const exact = await Promise.all(
     queries.map(async (q) =>
-      q.core === "" ? [] : (await read<Row>(exactPath(q.core))).filter((p) => p.core === q.core),
+      q.core === ""
+        ? []
+        : (await read<Row>(exactPath(q.core))).filter((p) => p.core === q.core && usable(q, p)),
     ),
   );
   const answers = queries.map((q, i) => answerByExact(q, cityOf, exact[i]));

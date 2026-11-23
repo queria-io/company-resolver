@@ -1,0 +1,10 @@
+version: 2
+
+models:
+  - name: former_name
+    access: public
+    columns:
+      - name: corporate_number
+        data_type: varchar
+      - name: name
+        data_type: varchar

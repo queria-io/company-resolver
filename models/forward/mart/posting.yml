@@ -10,3 +10,5 @@ models:
         data_type: varchar
       - name: corporate_number
         data_type: varchar
+      - name: core
+        data_type: varchar

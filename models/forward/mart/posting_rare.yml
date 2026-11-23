@@ -16,3 +16,5 @@ models:
         data_type: varchar
       - name: name
         data_type: varchar
+      - name: former
+        data_type: varchar

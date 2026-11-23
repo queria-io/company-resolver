@@ -1,7 +1,7 @@
 $schema: https://tabledoc.queria.io/schemas/table/v1.json
 title: 商号の bigram 索引
 description: |-
-  商号を 2 文字ずつに分けた並び（bigram）ごとの法人の一覧です。法人格と空白・中黒・ハイフン類を除き、英字を大文字に、小書きの仮名を大きい仮名に正規化した商号から作ります。
+  商号を 2 文字ずつに分けた並び（bigram）ごとの法人の一覧です。法人格と空白・中黒・ハイフン類を除き、英字を大文字に、小書きの仮名を大きい仮名に正規化した商号と旧商号から作ります。
 
   - bigram と lg_code の順に並べています。法人の商号・法人格は company にあります
 topics:
@@ -15,3 +15,6 @@ columns:
     description: "本店所在地の市区町村"
   - name: corporate_number
     title: 法人番号
+  - name: core
+    title: 商号の本体
+    description: "bigram を作った商号 (旧商号を含む) の本体"
