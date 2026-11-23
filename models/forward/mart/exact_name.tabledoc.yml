@@ -20,3 +20,6 @@ columns:
   - name: name
     title: 商号
     description: "NFKC で正規化した商号"
+  - name: former
+    title: 旧商号
+    description: "旧商号で引くための行の、NFKC で正規化した旧商号。今の商号の行は NULL"

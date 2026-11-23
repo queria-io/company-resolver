@@ -75,6 +75,42 @@ describe("/v1/forward", () => {
     });
   });
 
+  it("旧商号で 1 件に決まれば matched にし、照合した旧商号を示す", async () => {
+    const answer = await forward({ name: "株式会社旧テスト工業", address: "東京都中央区" });
+    expect(answer.status).toBe("matched");
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000007",
+      name: "株式会社テスト工業",
+      former_name: "株式会社旧テスト工業",
+      evidence: { name: "former", legal_form: "exact", city: "exact" },
+    });
+  });
+
+  it("旧商号の誤字は、旧商号との編集距離で候補に返す", async () => {
+    const answer = await forward({ name: "株式会社旧テスト工", address: "東京都中央区" });
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000007",
+      former_name: "株式会社旧テスト工業",
+    });
+  });
+
+  it("今の商号と旧商号の両方で一致した法人は 1 回だけ並べ、今の商号で示す", async () => {
+    const answer = await forward({ name: "茨城県交通サービス", address: "茨城県水戸市" });
+    expect(answer.status).toBe("matched");
+    expect(answer.same_name_count).toBe(1);
+    expect(answer.candidates.filter((c) => c.corporate_number === "1000000000016")).toHaveLength(1);
+    expect(answer.candidates[0]).not.toHaveProperty("former_name");
+  });
+
+  it("法人格を変える前の商号でも照合する", async () => {
+    const answer = await forward({ name: "茨城県交通サービス有限会社", address: "茨城県水戸市" });
+    expect(answer.status).toBe("matched");
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000016",
+      evidence: { name: "former", legal_form: "exact" },
+    });
+  });
+
   it("どの bigram も無ければ not_found", async () => {
     const answer = await forward({ name: "存在しない名前" });
     expect(answer).toEqual({ status: "not_found", same_name_count: null, candidates: [] });
@@ -140,6 +176,12 @@ describe("照合の規則を外したとき (bench/ablate.ts)", () => {
       corporate_number: "1000000000006",
       evidence: { name: "edit(2)" },
     });
+  });
+
+  it("former_name を外せば、旧商号では照合しない", async () => {
+    const answer = await run("株式会社旧テスト工業", "東京都中央区", ["former_name"]);
+    expect(answer.status).not.toBe("matched");
+    expect(answer.candidates.every((c) => c.former_name === undefined)).toBe(true);
   });
 });
 

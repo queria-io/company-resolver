@@ -8,7 +8,7 @@
 GET /v1/forward?name=株式会社クエリア&address=東京都千代田区紀尾井町1-3&limit=5
 ```
 
-`name` と `address` は 200 文字まで。応答は `status`（`matched` / `ambiguous` / `candidates` / `not_found`）、`same_name_count`、`candidates`（法人番号・商号・都道府県・市区町村・`evidence`）。ヘッダーの `X-Data-Version` はデプロイした索引のバージョン（データセットのバージョンの ID）、`X-Asset-Reads`・`X-Asset-Bytes` はその問い合わせで読んだ索引のファイルの数とバイト数。
+`name` と `address` は 200 文字まで。応答は `status`（`matched` / `ambiguous` / `candidates` / `not_found`）、`same_name_count`、`candidates`（法人番号・商号・都道府県・市区町村・`evidence`。旧商号と照合した候補は、その旧商号の `former_name` も）。ヘッダーの `X-Data-Version` はデプロイした索引のバージョン（データセットのバージョンの ID）、`X-Asset-Reads`・`X-Asset-Bytes` はその問い合わせで読んだ索引のファイルの数とバイト数。
 
 複数の企業をまとめて照合するときは、1 回に 20 件までを `POST /v1/forward/batch` に渡す。応答の `results` は、`queries` と同じ順に、1 件ずつの正引きと同じ形の応答を並べたもの。IP ごとに 1 分 10 回まで（`BATCH_LIMITER`）。
 
@@ -37,9 +37,9 @@ GET /v1/reverse?corporate_number=1180301018771
 
 | 表 | 置き場所 | 中身 |
 |---|---|---|
-| `exact_name` | `data/exact_name/{shard}.parquet` | 商号の本体ごとの法人（商号・法人格・lg_code）。8,192 個 |
+| `exact_name` | `data/exact_name/{shard}.parquet` | 商号の本体ごとの法人（商号・法人格・lg_code）。旧商号の本体の行も持つ（`former` が旧商号）。8,192 個 |
 | `gram` | `data/gram/{shard}.parquet` | bigram ごとの出現する法人の数（df）・IDF・共通の bigram の番号（`common_id`）。1,024 個 |
-| `posting_rare` | `data/posting_rare/{shard}.parquet` | 出現する法人が 10,000 以下の bigram ごとの法人（商号・法人格・lg_code つき）。8,192 個 |
+| `posting_rare` | `data/posting_rare/{shard}.parquet` | 出現する法人が 10,000 以下の bigram ごとの法人（商号・法人格・lg_code・旧商号つき）。8,192 個 |
 | `posting_common` | `data/posting_common/{common_id}/{bucket}.parquet` | 出現する法人が 10,000 を超える bigram ごとの法人。`bucket` は lg_code を 64 で割った余り |
 | `city` | `data/city.parquet` | 市区町村の lg_code・都道府県名・市区町村名。Worker は isolate の中で 1 回だけ読む |
 | `public_body` | `data/public_body.parquet` | 国の機関と地方公共団体（法人種別 101・201）。部局の名前を親の機関に照合するのに使う。isolate の中で 1 回だけ読む |

@@ -1,0 +1,17 @@
+$schema: https://tabledoc.queria.io/schemas/table/v1.json
+title: 法人の旧商号（正規化済み）
+description: |-
+  商号を変えたことのある法人の、変更履歴に記録された商号を NFKC で正規化したものです。正引きで旧商号を照合する索引の元になります。
+
+  - 変更履歴の各行の商号と、変更の行に記録された前の商号を集めています。今の商号も含みます
+  - 変更履歴は法人番号のデータセットが取り込みを始めた時点より後の変更だけを持ちます
+topics:
+  - 法人番号
+sources: [houjin-bangou]
+columns:
+  - name: corporate_number
+    title: 法人番号
+    description: "13 桁"
+  - name: name
+    title: 商号
+    description: "NFKC で正規化した、変更履歴に記録された商号"
