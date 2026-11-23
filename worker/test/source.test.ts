@@ -12,7 +12,7 @@ const dataset = (prefix: string, table: object): R2Bucket => {
     [`${prefix}versions/${ID}/version.json`]: JSON.stringify({
       fdl: "0.1",
       id: ID,
-      tables: { path: "tables.json" },
+      tables: { bytes: 0, sha256: "" },
     }),
     [`${prefix}versions/${ID}/tables.json`]: JSON.stringify({
       tables: { "reverse.company": table },

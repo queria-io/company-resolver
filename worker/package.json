@@ -14,7 +14,7 @@
     "fix": "oxlint --fix && oxfmt ."
   },
   "dependencies": {
-    "@queria-io/fdl-js": "^0.13.0",
+    "@queria-io/fdl-js": "^0.17.0",
     "hono": "^4.13.14",
     "hyparquet": "^1.32.0"
   },
