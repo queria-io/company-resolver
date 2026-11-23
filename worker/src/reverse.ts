@@ -136,7 +136,8 @@ export const reverse = async (
   const rows = await Promise.all(
     shardFiles(index, "reverse.company", corporateNumber.slice(-3)).map(async (ref) => {
       const bytes = ref.bytes ?? (await sizeOf(index, ref.key, options.onRead));
-      if (bytes === null) return [];
+      // 索引が指すファイルが無いのは索引の誤り。法人が無いとき (404) と区別し、FDL の読み方と同じくエラーにする
+      if (bytes === null) throw new Error(`not found: ${ref.key}`);
       // rows は読む範囲に使わない (行グループの行数はフッターから取る)
       const file = await openParquet(index.store, { ...ref, rows: 0, bytes }, options);
       return readWhere<Row>(file, "corporate_number", corporateNumber, COLUMNS);
