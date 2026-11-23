@@ -18,12 +18,12 @@ licenses:
 sources:
   - id: houjin-bangou
     title: 国税庁法人番号公表サイト（国税庁）
-    path: https://www.houjin-bangou.nta.go.jp/
+    url: https://www.houjin-bangou.nta.go.jp/
 
 contributors:
   - id: nta
     title: 国税庁
-    path: https://www.nta.go.jp/
+    url: https://www.nta.go.jp/
     roles: [rightsHolder]
 
 spatial_coverage: [JP]
