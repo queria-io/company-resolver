@@ -67,6 +67,14 @@ describe("/v1/forward", () => {
     });
   });
 
+  it("入力が商号の先頭と一致すれば、そう示して候補に返す", async () => {
+    const answer = await forward({ name: "キャリアバ", address: "東京都中央区" });
+    expect(answer.candidates[0]).toMatchObject({
+      corporate_number: "1000000000006",
+      evidence: { name: "prefix", city: "exact" },
+    });
+  });
+
   it("どの bigram も無ければ not_found", async () => {
     const answer = await forward({ name: "存在しない名前" });
     expect(answer).toEqual({ status: "not_found", same_name_count: null, candidates: [] });

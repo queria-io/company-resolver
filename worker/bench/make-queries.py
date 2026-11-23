@@ -1,7 +1,8 @@
 """EDINET の提出者から、bench/run.ts に渡す問い合わせ (JSONL) を作る。
 
 usage (リポジトリの直下で): uv run python worker/bench/make-queries.py <edinet.parquet> <out_dir>
-out_dir に clean.jsonl (正しい名前＋住所)、typo.jsonl (誤字あり＋住所)、bare.jsonl (法人格を外した名前＋住所)、bare-typo.jsonl (法人格を外した誤字あり＋住所) を書く。
+out_dir に clean.jsonl (正しい名前＋住所)、typo.jsonl (誤字あり＋住所)、bare.jsonl (法人格を外した名前＋住所)、bare-typo.jsonl (法人格を外した誤字あり＋住所)、
+trunc1〜3.jsonl (法人格を外し、商号の本体の末尾を 1〜3 文字削った名前＋住所。削った後に 3 文字以上残る法人だけ) を書く。
 正規化の規則は dbt のマクロ (macros/normalize.sql) をそのまま使う
 """
 import json
@@ -47,6 +48,13 @@ def main(edinet: str, out: str) -> None:
     for label, col in (("clean", "name"), ("typo", "typo_name"), ("bare", "bare_name"), ("bare-typo", "bare_typo_name")):
         rows = con.execute(f"SELECT truth, {col}, address FROM query ORDER BY qid").fetchall()
         with open(Path(out) / f"{label}.jsonl", "w") as f:
+            for truth, name, address in rows:
+                f.write(json.dumps({"truth": truth, "name": name, "address": address}, ensure_ascii=False) + "\n")
+    for k in (1, 2, 3):
+        rows = con.execute(
+            f"SELECT truth, core[1:length(core) - {k}], address FROM query WHERE length(core) >= {k} + 3 ORDER BY qid"
+        ).fetchall()
+        with open(Path(out) / f"trunc{k}.jsonl", "w") as f:
             for truth, name, address in rows:
                 f.write(json.dumps({"truth": truth, "name": name, "address": address}, ensure_ascii=False) + "\n")
 

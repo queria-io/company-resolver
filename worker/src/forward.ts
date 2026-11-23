@@ -30,6 +30,7 @@ export const RULES = [
   "city_rank",
   "same_name_candidates",
   "prefix_owner",
+  "prefix_rank",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -481,6 +482,11 @@ const answerByFuzzy = (
   );
   // city_rank: 住所の市区町村が違う候補は、商号の編集距離 2 つ分だけ後ろに並べる
   const penalty = (cityOk: boolean) => (cityOk || !q.on("city_rank") ? 0 : 2);
+  // prefix_rank: 入力が商号の先頭と一致して後ろに文字が続く候補は、編集距離 1 として並べる。
+  // 同じ順位の中では編集距離の短い候補を先にする
+  const prefixed = (p: Row) =>
+    q.on("prefix_rank") && p.core.length > q.core.length && p.core.startsWith(q.core);
+  const rankEd = (r: { p: Row; ed: number }) => (prefixed(r.p) ? Math.min(r.ed, 1) : r.ed);
   const byNumber = new Map([...rows, ...sameName].map((p) => [p.corporate_number, p]));
   const ranked = [...new Set([...national.keys(), ...local.keys()])]
     .flatMap((cn) => {
@@ -488,12 +494,19 @@ const answerByFuzzy = (
       if (!p) return [];
       const score = Math.max(national.get(cn) ?? 0, local.get(cn) ?? 0);
       return [
-        { p, score, ed: levenshtein(q.core, p.core), cityOk: q.cityOk(p), legal: q.legalOk(p) },
+        {
+          p,
+          score,
+          ed: levenshtein(q.core, p.core),
+          cityOk: q.cityOk(p),
+          legal: q.legalOk(p),
+          ...(prefixed(p) ? { label: "prefix" } : {}),
+        },
       ];
     })
     .sort(
       (a, b) =>
-        a.ed + penalty(a.cityOk) - (b.ed + penalty(b.cityOk)) ||
+        rankEd(a) + penalty(a.cityOk) - (rankEd(b) + penalty(b.cityOk)) ||
         a.ed - b.ed ||
         Number(b.legal) - Number(a.legal) ||
         b.score - a.score ||
