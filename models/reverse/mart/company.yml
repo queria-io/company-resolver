@@ -2,9 +2,6 @@ version: 2
 
 models:
   - name: company
-    description: |
-      法人ごとの最新の状態です。登記記録が閉鎖した法人も含み、旧商号と旧所在地を持ちます。
-      「国税庁法人番号公表サイト」（国税庁）（https://www.houjin-bangou.nta.go.jp/）を加工して作成。
     access: public
     columns:
       - name: shard

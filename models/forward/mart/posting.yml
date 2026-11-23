@@ -2,9 +2,6 @@ version: 2
 
 models:
   - name: posting
-    description: |
-      商号を 2 文字ずつに分けた並び（bigram）ごとの法人の一覧です。法人格と空白・中黒・ハイフン類を除き、英字を大文字に、小書きの仮名を大きい仮名に正規化した商号から作ります。
-      「国税庁法人番号公表サイト」（国税庁）（https://www.houjin-bangou.nta.go.jp/）を加工して作成。
     access: public
     columns:
       - name: g

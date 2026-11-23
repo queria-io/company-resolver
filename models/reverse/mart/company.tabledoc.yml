@@ -1,17 +1,14 @@
----
-$schema: https://queria.io/schemas/table/v1.json
-table: reverse.company
+$schema: https://tabledoc.queria.io/schemas/table/v1.json
 title: 法人の状態と変更履歴
 description: |-
   法人ごとの最新の状態です。登記記録が閉鎖した法人も含み、旧商号と旧所在地を持ちます。
 
   - 旧商号と旧所在地は、法人番号のデータセットの変更履歴にある分だけです。取り込みを始めた時点より前の変更は、一部の法人だけが持ちます
   - shard（法人番号の下 3 桁）ごとにファイルを分け、法人番号の順に並べています
-keywords:
+topics:
   - 法人番号
-sources:
-  - path: https://www.houjin-bangou.nta.go.jp/
-fields:
+sources: [houjin-bangou]
+columns:
   - name: shard
     title: ファイルの番号
     description: "法人番号の下 3 桁"
@@ -49,4 +46,3 @@ fields:
   - name: former_addresses
     title: 旧所在地
     description: "古い順。until はその所在地でなくなった日"
----

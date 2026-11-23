@@ -1,14 +1,11 @@
----
-$schema: https://queria.io/schemas/table/v1.json
-table: forward.posting_rare
+$schema: https://tabledoc.queria.io/schemas/table/v1.json
 title: bigram 索引（出現が少ないもの）
 description: |-
   出現する法人が 10,000 以下の bigram ごとの法人の一覧です。商号を 2 文字ずつに分けた並び（bigram）で、近い商号の法人を検索するのに使います。
-keywords:
+topics:
   - 法人番号
-sources:
-  - path: https://www.houjin-bangou.nta.go.jp/
-fields:
+sources: [houjin-bangou]
+columns:
   - name: g
     title: bigram
   - name: lg_code
@@ -25,4 +22,3 @@ fields:
   - name: name
     title: 商号
     description: "NFKC で正規化した商号"
----
