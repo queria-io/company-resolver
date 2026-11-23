@@ -68,21 +68,8 @@ const fromRepository = async (repo) => {
   };
   const id = (await get("refs/heads/main")).trim();
   const record = JSON.parse(await get(`versions/${id}/version.json`));
-  // version.json が記録するメタデータの名前 (fdl 0.26 までは catalog の項目に ducklake.duckdb)
-  const metadata = (record.metadata ?? record.catalog)?.path;
-  // バージョンのフォルダの直下のファイル名だけを受け付ける (FDL の仕様)
-  if (
-    typeof metadata !== "string" ||
-    !/^[^/\\]+$/.test(metadata) ||
-    metadata === "." ||
-    metadata === ".."
-  ) {
-    throw new Error(
-      `versions/${id}/version.json がメタデータの名前を記録していない: ${JSON.stringify(metadata)}`,
-    );
-  }
   return {
-    catalog: `ducklake:${repo}versions/${id}/${metadata}`,
+    catalog: `ducklake:${repo}versions/${id}/metadata.db`,
     version: id,
     createdAt: record.created_at,
   };
