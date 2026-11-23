@@ -30,6 +30,7 @@ export const RULES = [
   "city_rank",
   "same_name_candidates",
   "prefix_owner",
+  "prefix_rank",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -422,8 +423,15 @@ const ownerAnswer = (
     if (others === null) return null;
     // 持ち主の商号で始まる別の法人が、持ち主の後ろの文字数より少ない編集で入力に届くなら、入力はその法人の
     // 誤字と読める (茨城県交通サビース → 茨城県交通サービス)。持ち主を先頭に並べない
+    // 商号の先頭が入力と同じ法人 (prefix_rank の prefix) があれば、入力はその法人の末尾が欠けた名前と読める
+    // (茨城県交通サー → 茨城県交通サービス)。機関の部局では見ない (後ろに続く商号は部局の中の別の組織)
     const rest = Array.from(q.core).length - Array.from(owners[0].core).length;
-    if (others.some((r) => r.p.core.startsWith(owners[0].core) && r.ed < rest)) return null;
+    if (
+      others.some(
+        (r) => (r.p.core.startsWith(owners[0].core) && r.ed < rest) || r.label === "prefix",
+      )
+    )
+      return null;
     const firsts: Ranked[] = owners
       .map((p) => ({ p, ed: 0, cityOk: q.cityOk(p), label: "parent" }))
       .sort(
@@ -481,6 +489,11 @@ const answerByFuzzy = (
   );
   // city_rank: 住所の市区町村が違う候補は、商号の編集距離 2 つ分だけ後ろに並べる
   const penalty = (cityOk: boolean) => (cityOk || !q.on("city_rank") ? 0 : 2);
+  // prefix_rank: 入力が商号の先頭と一致して後ろに文字が続く候補は、編集距離 1 として並べる。
+  // 同じ順位の中では編集距離の短い候補を先にする
+  const prefixed = (p: Row) =>
+    q.on("prefix_rank") && p.core.length > q.core.length && p.core.startsWith(q.core);
+  const rankEd = (r: { p: Row; ed: number }) => (prefixed(r.p) ? Math.min(r.ed, 1) : r.ed);
   const byNumber = new Map([...rows, ...sameName].map((p) => [p.corporate_number, p]));
   const ranked = [...new Set([...national.keys(), ...local.keys()])]
     .flatMap((cn) => {
@@ -488,12 +501,19 @@ const answerByFuzzy = (
       if (!p) return [];
       const score = Math.max(national.get(cn) ?? 0, local.get(cn) ?? 0);
       return [
-        { p, score, ed: levenshtein(q.core, p.core), cityOk: q.cityOk(p), legal: q.legalOk(p) },
+        {
+          p,
+          score,
+          ed: levenshtein(q.core, p.core),
+          cityOk: q.cityOk(p),
+          legal: q.legalOk(p),
+          ...(prefixed(p) ? { label: "prefix" } : {}),
+        },
       ];
     })
     .sort(
       (a, b) =>
-        a.ed + penalty(a.cityOk) - (b.ed + penalty(b.cityOk)) ||
+        rankEd(a) + penalty(a.cityOk) - (rankEd(b) + penalty(b.cityOk)) ||
         a.ed - b.ed ||
         Number(b.legal) - Number(a.legal) ||
         b.score - a.score ||
