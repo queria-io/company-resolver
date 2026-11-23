@@ -204,7 +204,7 @@ const ownerOf = async (
     );
     const rows = found.find((r) => r.length > 0);
     // 今の商号と旧商号の両方で一致した法人は 1 つにする
-    if (rows) return { company: firstPerCompany(rows.sort(currentFirst), (p) => p), parent };
+    if (rows) return { company: firstPerCompany(rows.sort(keptFirst), (p) => p), parent };
   }
   return parent.bodies.length > 0 ? { company: null, parent } : null;
 };
@@ -239,7 +239,14 @@ const firstPerCompany = <T>(xs: readonly T[], p: (x: T) => Row): T[] => {
 const currentFirst = (a: Row, b: Row) => Number(Boolean(a.former)) - Number(Boolean(b.former));
 
 /**
- * IDF の合計の上位 COMPARE_TOP 件の商号 (rowKey) と合計。旧商号の行は今の商号と別に数える。合計が同じなら商号の編集距離の小さい順
+ * 同じ法人の行のうち残す 1 つを決める比較: 今の商号の行を先に、旧商号の行どうしは旧商号の順に
+ * (索引のファイルの中の行の順は former で並べていないので、それに頼らない)
+ */
+const keptFirst = (a: Row, b: Row) =>
+  currentFirst(a, b) || (a.former ?? "").localeCompare(b.former ?? "");
+
+/**
+ * IDF の合計の上位 COMPARE_TOP 社の商号 (rowKey) と合計。旧商号の行は今の商号と別に合計し、同じ法人の行はすべて残す。合計が同じなら商号の編集距離の小さい順
  * (全国で読む bigram が少なく同じ合計の法人が多いとき、入力に近い商号を落とさないため)
  */
 const topByScore = (
@@ -255,13 +262,21 @@ const topByScore = (
     // 商号ごとに 1 回だけ計算する (rows には同じ商号が bigram の数だけある)
     if (!distance.has(key)) distance.set(key, levenshtein(core, r.core));
   }
+  // 上位 COMPARE_TOP 社の商号を、旧商号の行も含めて残す (1 社が今の商号と旧商号で枠を 2 つ使わないように)
+  const companies = new Set<string>();
   return new Map(
     [...scores]
       .sort(
         ([a, x], [b, y]) =>
           y - x || (distance.get(a) ?? 0) - (distance.get(b) ?? 0) || a.localeCompare(b),
       )
-      .slice(0, COMPARE_TOP),
+      .filter(([key]) => {
+        const cn = key.slice(0, key.indexOf("\t"));
+        if (companies.has(cn)) return true;
+        if (companies.size >= COMPARE_TOP) return false;
+        companies.add(cn);
+        return true;
+      }),
   );
 };
 
@@ -340,10 +355,7 @@ const cityMatches = (q: Query, p: Row): boolean =>
  * 今の商号と旧商号の両方で一致した法人は 1 つに数える
  */
 const sameOf = (q: Query, exact: readonly Row[]): Row[] =>
-  firstPerCompany(
-    exact.filter((p) => q.legalOk(p) && cityMatches(q, p)).sort(currentFirst),
-    (p) => p,
-  );
+  firstPerCompany(exact.filter((p) => q.legalOk(p) && cityMatches(q, p)).sort(keptFirst), (p) => p);
 
 /**
  * 商号が同じ法人で答えが決まれば、その応答。商号と法人格 (住所の市区町村が分かれば市区町村も) が一致する
@@ -366,7 +378,8 @@ const answerByExact = (
         Number(b.cityOk) - Number(a.cityOk) ||
         Number(q.legalOk(b.p)) - Number(q.legalOk(a.p)) ||
         currentFirst(a.p, b.p) ||
-        a.p.corporate_number.localeCompare(b.p.corporate_number),
+        a.p.corporate_number.localeCompare(b.p.corporate_number) ||
+        keptFirst(a.p, b.p),
     );
   return answerOf(
     q,

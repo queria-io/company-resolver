@@ -1,4 +1,5 @@
 -- bigram ごとの、出現する法人の数 (df。今の商号と旧商号の両方にあっても 1 社と数える) と IDF。Worker は shard のファイルを丸ごと読む (shard は worker/scripts/build-data.mjs が作る)。
+-- (posting_rare・posting_common には旧商号の行もあるので、読む行は df より旧商号の分だけ多い)。
 -- 出現する法人が national_rows を超える bigram (共通の bigram) には番号 (common_id) を付け、
 -- その行は posting_common に、ほかの bigram の行は posting_rare に置く
 WITH g AS (

@@ -54,15 +54,20 @@ KINDS = {"1000000000101": "101", "1000000000201": "201", "1000000000202": "201",
 FIRST = date(2015, 10, 5)
 # 商号を変えた法人。最初の行は旧商号 (旧商号での正引き former_name を試す)
 RENAMED = {"1000000000007": "株式会社旧テスト工業", "1000000000016": "茨城県交通サービス有限会社"}
+# 誤って登録した商号を訂正の行 (correct = '1') で直した法人。最初の行は誤った商号 (旧商号にしない)
+CORRECTED = {"1000000000004": "クエリヤ商事株式会社"}
 # 履歴。1000000000001 は所在地を 2 回変えた法人、1000000000009 は商号を変えたあと合併で閉鎖した法人、
 # RENAMED は商号を 1 回変えた法人 (変更の行に前の商号を記録する)
 HISTORY = [
-    (c[0], 1, c[0] != "1000000000001" and c[0] not in RENAMED, FIRST, RENAMED.get(c[0], c[1]), None,
-     c[2], c[3], c[4], None, None, None)
+    (c[0], 1, c[0] != "1000000000001" and c[0] not in RENAMED | CORRECTED, FIRST,
+     RENAMED.get(c[0], CORRECTED.get(c[0], c[1])), None, c[2], c[3], c[4], None, None, None)
     for c in COMPANIES
 ] + [
     (c[0], 2, True, date(2024, 4, 1), c[1], RENAMED[c[0]], c[2], c[3], c[4], None, None, None)
     for c in COMPANIES if c[0] in RENAMED
+] + [
+    (c[0], 2, True, date(2016, 1, 4), c[1], None, c[2], c[3], c[4], None, None, None)
+    for c in COMPANIES if c[0] in CORRECTED
 ] + [
     ("1000000000001", 2, False, date(2020, 4, 1), "株式会社クエリア", None, "東京都", "中央区", "131024", None, None, None),
     ("1000000000001", 3, True, date(2022, 4, 1), "株式会社クエリア", None, "東京都", "千代田区", "131016", None, None, None),
@@ -92,6 +97,15 @@ def source(path: Path) -> None:
         INSERT INTO h.mart_houjin_bangou_history
         VALUES (?, ?, ?, ?, ?, ?, NULL, '301', ?, ?, CASE WHEN ? = '131024' THEN '2-2' ELSE '1-1' END, ?, ?, ?, ?, ?)
     """, [(*r[:8], r[8], r[8], FIRST, *r[9:]) for r in HISTORY])
+    # 手続の区分 (01 新規・11 商号の変更・12 所在地の変更) と訂正の区分
+    con.execute("ALTER TABLE h.mart_houjin_bangou_history ADD COLUMN process VARCHAR")
+    con.execute("ALTER TABLE h.mart_houjin_bangou_history ADD COLUMN correct VARCHAR")
+    con.execute("""
+        UPDATE h.mart_houjin_bangou_history SET
+            process = CASE WHEN history_seq = 1 THEN '01' WHEN previous_name IS NOT NULL THEN '11'
+                WHEN corporate_number IN ? THEN '11' ELSE '12' END,
+            correct = CASE WHEN history_seq > 1 AND corporate_number IN ? THEN '1' ELSE '0' END
+    """, [list(CORRECTED), list(CORRECTED)])
 
 
 def main() -> None:

@@ -102,6 +102,12 @@ describe("/v1/forward", () => {
     expect(answer.candidates[0]).not.toHaveProperty("former_name");
   });
 
+  it("訂正で直された誤った商号は、旧商号として照合しない", async () => {
+    const answer = await forward({ name: "クエリヤ商事株式会社", address: "東京都千代田区" });
+    expect(answer.status).not.toBe("matched");
+    expect(answer.candidates.every((c) => c.former_name === undefined)).toBe(true);
+  });
+
   it("法人格を変える前の商号でも照合する", async () => {
     const answer = await forward({ name: "茨城県交通サービス有限会社", address: "茨城県水戸市" });
     expect(answer.status).toBe("matched");
