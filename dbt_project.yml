@@ -12,7 +12,7 @@ clean-targets:
 
 # 逆引きの Worker (worker/src/reverse.ts) は DuckLake のカタログを読まず、ここで書いた Parquet を直接読む。
 # 正引きの表は Worker のビルド (worker/scripts/build-data.mjs) がファイルに分けて静的アセットに置く。
-# 表はまるごと作り直す (incremental にすると削除ファイルができ、Parquet だけを読む Worker が消した行を返す)。
+# 表はまるごと作り直す (incremental にすると削除ファイルができ、逆引きの Worker が問い合わせのたびに削除ファイルも読む)。
 # 行グループの大きさはスキーマに付ける (dbt は __dbt_tmp に書いてから改名するので、テーブルに付けても効かない)。
 # 大きさは DuckDB が並列に書く単位 (122,880 行) を割り切るものにする。DuckDB はベクトル (2,048 行) より
 # 小さい行グループを書かないので、2,048 行が最小

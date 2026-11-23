@@ -63,6 +63,12 @@ describe("/v1/reverse", () => {
     });
   });
 
+  it("2 回目はフッターを拠点のキャッシュから取り、行グループだけを読む", async () => {
+    const reads = async () => (await reverse("1000000000002")).headers.get("X-R2-Reads");
+    expect(Number(await reads())).toBeGreaterThan(1);
+    expect(await reads()).toBe("1");
+  });
+
   it("無い法人番号は 404", async () => {
     expect((await reverse("1000000000010")).status).toBe(404);
     expect((await reverse("1000000000099")).status).toBe(404);

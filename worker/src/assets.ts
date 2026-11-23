@@ -1,8 +1,7 @@
 // 正引きの索引を、Worker と一緒にデプロイした静的アセット (scripts/build-data.mjs が public/data/ に置く) から読む。
 // 静的アセットは丸ごとしか読めないので、索引は 1 件の検索で読むファイルが小さくなるように分けてある (dbt_project.yml)
+import { compressors } from "@queria-io/fdl-js";
 import { parquetReadObjects } from "hyparquet";
-
-import { compressors } from "./parquet";
 
 /** パスのファイルの中身。無ければ null */
 export type Files = (path: string) => Promise<ArrayBuffer | null>;
