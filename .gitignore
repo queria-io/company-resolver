@@ -11,3 +11,6 @@ package-lock.yml
 .fdl/
 # テストの索引 (worker/test/make-fixture.py が作る) はリポジトリに入れる
 !worker/test/fixture/**/*.parquet
+
+# 共通のスクリプト (git clone https://github.com/queria-io/dataset-shared.git shared)
+shared/
