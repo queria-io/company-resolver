@@ -4,7 +4,7 @@ usage (リポジトリの直下で): uv run python worker/bench/make-queries.py 
 out_dir に clean.jsonl (正しい名前＋住所)、typo.jsonl (誤字あり＋住所)、bare.jsonl (法人格を外した名前＋住所)、bare-typo.jsonl (法人格を外した誤字あり＋住所)、
 trunc1〜3.jsonl (法人格を外し、商号の本体の末尾を 1〜3 文字削った名前＋住所。削った後に 3 文字以上残る法人だけ) を書く。
 company_resolver の DuckLake (例: ducklake:https://data.queria.io/datasets/queria/company_resolver/metadata.db) を渡すと、
-former.jsonl (旧商号＋住所。forward.former_name の商号のうち、NFKC と空白の除去で今の提出者名と同じになるものを除く) も書く。
+former.jsonl (旧商号＋住所。forward.former_name の商号のうち、NFKC と空白の除去で今の提出者名か法人番号の今の商号と同じになるものを除く) も書く。
 正規化の規則は dbt のマクロ (macros/normalize.sql) をそのまま使う
 """
 import json
@@ -45,11 +45,19 @@ def load_queries(con: duckdb.DuckDBPyConnection, edinet: str) -> None:
 
 
 def write_former(con: duckdb.DuckDBPyConnection, catalog: str, out: str) -> None:
-    con.execute(f"ATTACH '{catalog}' AS cr (READ_ONLY)")
+    con.execute(f"ATTACH '{catalog.replace(chr(39), chr(39) * 2)}' AS cr (READ_ONLY)")
+    # former_name は今の商号も持つ (company_core が今の商号と比べて除く) ので、法人番号の今の商号も除く。
+    # EDINET の提出者名が前の商号のままの会社では、提出者名と比べるだけだと今の商号が旧商号として残る
     rows = con.execute("""
-        SELECT truth, f.name, address FROM query JOIN cr.forward.former_name f ON f.corporate_number = query.truth
-        WHERE replace(replace(f.name, ' ', ''), '　', '') <> replace(replace(query.name, ' ', ''), '　', '')
-        ORDER BY qid, f.name
+        WITH f AS (
+            SELECT DISTINCT qid, truth, f.name, address
+            FROM query
+            JOIN cr.forward.former_name f ON f.corporate_number = query.truth
+            JOIN cr.forward.company_name c ON c.corporate_number = query.truth
+            WHERE replace(replace(f.name, ' ', ''), '　', '') <> replace(replace(query.name, ' ', ''), '　', '')
+              AND replace(replace(f.name, ' ', ''), '　', '') <> replace(replace(c.name, ' ', ''), '　', '')
+        )
+        SELECT truth, name, address FROM f ORDER BY qid, name
     """).fetchall()
     with open(Path(out) / "former.jsonl", "w") as f:
         for truth, name, address in rows:
