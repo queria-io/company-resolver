@@ -1,8 +1,10 @@
 """EDINET の提出者から、bench/run.ts に渡す問い合わせ (JSONL) を作る。
 
-usage (リポジトリの直下で): uv run python worker/bench/make-queries.py <edinet.parquet> <out_dir>
+usage (リポジトリの直下で): uv run python worker/bench/make-queries.py <edinet.parquet> <out_dir> [<company_resolver の DuckLake>]
 out_dir に clean.jsonl (正しい名前＋住所)、typo.jsonl (誤字あり＋住所)、bare.jsonl (法人格を外した名前＋住所)、bare-typo.jsonl (法人格を外した誤字あり＋住所)、
 trunc1〜3.jsonl (法人格を外し、商号の本体の末尾を 1〜3 文字削った名前＋住所。削った後に 3 文字以上残る法人だけ) を書く。
+company_resolver の DuckLake (例: ducklake:https://data.queria.io/datasets/queria/company_resolver/metadata.db) を渡すと、
+former.jsonl (旧商号＋住所。forward.former_name の商号のうち、正規化した商号の本体が今の提出者名か法人番号の今の商号と同じものを除き、本体が同じ商号は 1 つにする) も書く。
 正規化の規則は dbt のマクロ (macros/normalize.sql) をそのまま使う
 """
 import json
@@ -42,7 +44,27 @@ def load_queries(con: duckdb.DuckDBPyConnection, edinet: str) -> None:
     """)
 
 
-def main(edinet: str, out: str) -> None:
+def write_former(con: duckdb.DuckDBPyConnection, catalog: str, out: str) -> None:
+    con.execute(f"ATTACH '{catalog.replace(chr(39), chr(39) * 2)}' AS cr (READ_ONLY)")
+    # former_name は今の商号も持つ (company_core が今の商号と比べて除く) ので、法人番号の今の商号も除く。
+    # EDINET の提出者名が前の商号のままの会社では、提出者名と比べるだけだと今の商号が旧商号として残る。
+    # 比較と重複の除去には索引と同じ正規化 (商号の本体) を使う
+    rows = con.execute(f"""
+        WITH f AS (
+            SELECT qid, truth, f.name, address, {MACROS.core_name('f.name')} AS core
+            FROM query
+            JOIN cr.forward.former_name f ON f.corporate_number = query.truth
+            JOIN cr.forward.company_name c ON c.corporate_number = query.truth
+            WHERE {MACROS.core_name('f.name')} NOT IN (query.core, {MACROS.core_name('c.name')})
+        )
+        SELECT truth, min(name), address FROM f GROUP BY qid, truth, address, core ORDER BY qid, min(name)
+    """).fetchall()
+    with open(Path(out) / "former.jsonl", "w") as f:
+        for truth, name, address in rows:
+            f.write(json.dumps({"truth": truth, "name": name, "address": address}, ensure_ascii=False) + "\n")
+
+
+def main(edinet: str, out: str, catalog: str | None = None) -> None:
     con = duckdb.connect()
     load_queries(con, edinet)
     for label, col in (("clean", "name"), ("typo", "typo_name"), ("bare", "bare_name"), ("bare-typo", "bare_typo_name")):
@@ -57,7 +79,9 @@ def main(edinet: str, out: str) -> None:
         with open(Path(out) / f"trunc{k}.jsonl", "w") as f:
             for truth, name, address in rows:
                 f.write(json.dumps({"truth": truth, "name": name, "address": address}, ensure_ascii=False) + "\n")
+    if catalog:
+        write_former(con, catalog, out)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(*sys.argv[1:4])
